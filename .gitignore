@@ -18,7 +18,10 @@ android/app/*.iml
 *.db-wal
 *.backup_*
 
-# OS & Editor files
+# Built APKs
+*.apk
+TASMAC_Shop11066.apk
+
 .DS_Store
 Thumbs.db
 .vscode/
