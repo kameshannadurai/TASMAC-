@@ -20,24 +20,21 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Make Gradle Wrapper Executable
+      - name: Grant Execute Permission to Gradlew
         run: chmod +x android/gradlew
 
       - name: Build Android APK (Release & Debug)
         run: |
           cd android
-          ./gradlew assembleRelease assembleDebug
+          ./gradlew assembleRelease assembleDebug --stacktrace
 
-      - name: Upload Release APK Artifact
+      - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
           name: TASMAC_Shop11066_Release_APK
           path: android/app/build/outputs/apk/release/app-release.apk
 
-      - name: Upload Debug APK Artifact
+      - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: TASMAC_Shop11066_Debug_APK
