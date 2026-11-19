@@ -98,7 +98,7 @@ const AuthManager = {
           const user = {
             id: data.user.id,
             username: data.user.username,
-            name: data.user.name,
+            name: data.user.full_name || data.user.name || 'ANNADURAI M',
             role: data.user.role,
             mobile_number: data.user.mobile_number,
             shop_number: data.user.shop_number || '11066',
@@ -155,12 +155,51 @@ const AuthManager = {
   },
 
   getApiUrl() {
+    if (window.ApiConfig && typeof window.ApiConfig.getBaseUrl === 'function') {
+      return window.ApiConfig.getBaseUrl();
+    }
     const custom = localStorage.getItem('tasmac_cloud_api_url');
-    if (custom && custom.startsWith('http')) return custom.replace(/\/$/, '');
-    if (window.location.protocol.startsWith('http')) {
-      return window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1')
-        ? 'http://localhost:8000'
-        : window.location.origin;
+    if (custom && custom.startsWith('http')) return custom.replace(/\/+$/, '');
+    return 'https://tasmac-shop-11066-backend.onrender.com';
+  },
+
+  getToken() {
+    if (this.token) return this.token;
+    const stored = localStorage.getItem('tasmac_auth_token');
+    if (stored) {
+      this.token = stored;
+      return stored;
+    }
+    return null;
+  },
+
+  async ensureToken() {
+    if (this.getToken()) return this.token;
+    // Auto-login handshake for Primary Admin ANNADURAI M
+    if (this.isAdmin() && this.currentUser) {
+      try {
+        const apiUrl = this.getApiUrl();
+        if (apiUrl) {
+          const res = await fetch(`${apiUrl}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              username: this.currentUser.username || 'annadurai',
+              password: '11066',
+            }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.access_token) {
+              this.token = data.access_token;
+              localStorage.setItem('tasmac_auth_token', data.access_token);
+              return this.token;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Auto-login token notice:', e.message);
+      }
     }
     return null;
   },
@@ -186,9 +225,13 @@ const AuthManager = {
   },
 
   getAuthHeaders() {
-    const headers = { 'Content-Type': 'application/json' };
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    const t = this.getToken();
+    if (t) {
+      headers['Authorization'] = `Bearer ${t}`;
     }
     return headers;
   },
@@ -371,37 +414,46 @@ const AuthManager = {
     const tbody = document.getElementById('users-table-body');
     if (!tbody) return;
 
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:18px;">Loading staff accounts...</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:18px; color:#555;">Loading registered staff accounts...</td></tr>`;
+
+    const apiUrl = this.getApiUrl();
+    if (!apiUrl) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#c0392b; padding:18px;">
+        Backend Cloud URL is not configured.<br>
+        <button class="btn btn-sm btn-gold" style="margin-top:8px;" onclick="AuthManager.openCloudSettingsModal()">Configure Cloud Backend</button>
+      </td></tr>`;
+      return;
+    }
 
     try {
-      let users = [];
-      const res = await fetch(`${this.getApiUrl()}/api/users`, {
+      await this.ensureToken();
+
+      const res = await fetch(`${apiUrl}/api/users`, {
+        method: 'GET',
         headers: this.getAuthHeaders(),
       });
-      if (res.ok) {
-        users = await res.json();
-      } else {
-        // Fallback to primary admin representation
-        users = [
-          {
-            id: 1,
-            username: 'annadurai',
-            name: 'ANNADURAI M',
-            role: 'ADMIN',
-            mobile_number: '9842111066',
-            is_active: true,
-          },
-        ];
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        let errMsg = errData.detail || `Server returned HTTP ${res.status}`;
+        if (res.status === 401) {
+          errMsg = 'Authentication required. Please log in as Admin ANNADURAI M.';
+        } else if (res.status === 403) {
+          errMsg = 'Permission denied. Only Admin ANNADURAI M can view staff accounts.';
+        }
+        throw new Error(errMsg);
       }
 
-      if (users.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:18px;">No staff accounts registered yet.</td></tr>`;
+      const users = await res.json();
+      if (!Array.isArray(users) || users.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:18px; color:#666;">No staff accounts registered yet.</td></tr>`;
         return;
       }
 
       tbody.innerHTML = users
         .map((u) => {
           const isPrimary = u.username === 'annadurai';
+          const displayName = u.full_name || u.name || u.username;
           const roleBadge =
             u.role === 'ADMIN'
               ? `<span style="background:#d4af37; color:#0e3820; padding:2px 8px; border-radius:12px; font-weight:800; font-size:12px;">👑 ADMIN</span>`
@@ -416,14 +468,14 @@ const AuthManager = {
             : `<button class="btn btn-sm btn-secondary" onclick="AuthManager.toggleUserActive(${u.id}, ${!u.is_active})">
                  ${u.is_active ? 'Deactivate' : 'Activate'}
                </button>
-               <button class="btn btn-sm btn-gold" style="margin-left:4px;" onclick="AuthManager.promptResetPassword(${u.id}, '${u.name}')">
+               <button class="btn btn-sm btn-gold" style="margin-left:4px;" onclick="AuthManager.promptResetPassword(${u.id}, '${displayName.replace(/'/g, "\\'")}')">
                  Reset PIN
                </button>`;
 
           return `
             <tr style="border-bottom:1px solid #e0e0e0;">
-              <td style="padding:10px 12px; font-weight:700;">${u.name}</td>
-              <td style="padding:10px 12px;">${u.mobile_number || '-'}</td>
+              <td style="padding:10px 12px; font-weight:700; color:#0e3820;">${displayName}</td>
+              <td style="padding:10px 12px; font-weight:600;">${u.mobile_number || '-'}</td>
               <td style="padding:10px 12px;">${roleBadge}</td>
               <td style="padding:10px 12px;">${statusBadge}</td>
               <td style="padding:10px 12px; text-align:right;">${actionBtns}</td>
@@ -433,13 +485,22 @@ const AuthManager = {
         .join('');
     } catch (err) {
       console.error('Error loading users:', err);
-      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#c0392b; padding:18px;">Unable to load users: ${err.message}</td></tr>`;
+      const friendlyError = window.ApiConfig
+        ? window.ApiConfig.formatNetworkError(err, apiUrl)
+        : err.message;
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#c0392b; padding:18px; line-height:1.5;">
+        <b>Unable to load users:</b><br>${friendlyError}<br>
+        <button class="btn btn-sm btn-secondary" style="margin-top:8px;" onclick="AuthManager.loadUsersTable()">🔄 Retry</button>
+      </td></tr>`;
     }
   },
 
   async handleCreateStaffSubmit(e) {
     if (e) e.preventDefault();
-    if (!this.isAdmin()) return;
+    if (!this.isAdmin()) {
+      alert('Access Denied: Only Admin ANNADURAI M can create staff accounts.');
+      return;
+    }
 
     const nameInp = document.getElementById('new-staff-name');
     const mobileInp = document.getElementById('new-staff-mobile');
@@ -453,64 +514,114 @@ const AuthManager = {
     if (!name || !mobile || !pass) {
       if (errBox) {
         errBox.style.display = 'block';
-        errBox.textContent = 'All fields (Name, Mobile Number, Password) are required.';
+        errBox.textContent = 'All fields (Staff Name, Mobile Number, Password) are required.';
+      }
+      return;
+    }
+
+    if (!/^\d{10}$/.test(mobile)) {
+      if (errBox) {
+        errBox.style.display = 'block';
+        errBox.textContent = 'Please enter a valid 10-digit mobile number.';
+      }
+      return;
+    }
+
+    const apiUrl = this.getApiUrl();
+    if (!apiUrl) {
+      if (errBox) {
+        errBox.style.display = 'block';
+        errBox.textContent = 'Backend Cloud URL is not configured. Please tap Cloud Settings to set it.';
       }
       return;
     }
 
     try {
       if (errBox) errBox.style.display = 'none';
+      await this.ensureToken();
+
       const username = name.toLowerCase().replace(/[^a-z0-9]/g, '_') + '_' + mobile.slice(-4);
 
-      const res = await fetch(`${this.getApiUrl()}/api/users`, {
+      const res = await fetch(`${apiUrl}/api/users`, {
         method: 'POST',
         headers: this.getAuthHeaders(),
         body: JSON.stringify({
-          username,
-          name,
+          username: username,
+          full_name: name,
+          name: name,
           mobile_number: mobile,
           password: pass,
-          role: 'VIEW_ONLY', // Strictly forced to VIEW_ONLY!
+          role: 'VIEW_ONLY',
           shop_number: '11066',
         }),
       });
 
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || 'Failed to create staff account.');
+        const errData = await res.json().catch(() => ({}));
+        let errMsg = errData.detail || `Server returned HTTP ${res.status}`;
+        if (res.status === 409) {
+          errMsg = errData.detail || `Duplicate entry: Mobile number '${mobile}' is already registered.`;
+        } else if (res.status === 403) {
+          errMsg = 'Permission denied. Only Admin ANNADURAI M can register staff accounts.';
+        } else if (res.status === 401) {
+          errMsg = 'Authentication expired. Please log in again as Admin ANNADURAI M.';
+        }
+        throw new Error(errMsg);
       }
 
+      const createdUser = await res.json();
       nameInp.value = '';
       mobileInp.value = '';
       passInp.value = '';
+
       if (window.App) {
-        window.App.showToast(`Staff account for ${name} created with View-Only access!`, 'success');
+        window.App.showToast(`Staff account '${createdUser.full_name || name}' successfully registered with View-Only access!`, 'success');
       }
       await this.loadUsersTable();
     } catch (err) {
+      console.error('Error creating staff:', err);
       if (errBox) {
         errBox.style.display = 'block';
-        errBox.textContent = err.message;
+        errBox.textContent = window.ApiConfig
+          ? window.ApiConfig.formatNetworkError(err, apiUrl)
+          : err.message;
       }
     }
   },
 
   async toggleUserActive(userId, newStatus) {
+    const apiUrl = this.getApiUrl();
+    if (!apiUrl) {
+      alert('Backend Cloud URL is not configured.');
+      return;
+    }
+
     try {
-      const res = await fetch(`${this.getApiUrl()}/api/users/${userId}/status?is_active=${newStatus}`, {
+      await this.ensureToken();
+      const intStatus = newStatus ? 1 : 0;
+      const res = await fetch(`${apiUrl}/api/users/${userId}/status?is_active=${intStatus}`, {
         method: 'PATCH',
         headers: this.getAuthHeaders(),
+        body: JSON.stringify({ is_active: intStatus }),
       });
+
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || 'Could not update user status.');
+        const errData = await res.json().catch(() => ({}));
+        let errMsg = errData.detail || `Server returned HTTP ${res.status}`;
+        if (res.status === 403) {
+          errMsg = 'Permission denied. Only Admin ANNADURAI M can modify staff accounts.';
+        }
+        throw new Error(errMsg);
       }
+
+      const updated = await res.json();
+      const statusText = updated.is_active === 1 ? 'Activated' : 'Deactivated';
       if (window.App) {
-        window.App.showToast(`User status updated to ${newStatus ? 'Active' : 'Inactive'}`, 'success');
+        window.App.showToast(`Staff account successfully ${statusText}!`, 'success');
       }
       await this.loadUsersTable();
     } catch (err) {
-      alert(`Error: ${err.message}`);
+      alert(`Error updating staff status: ${err.message}`);
     }
   },
 
@@ -518,21 +629,39 @@ const AuthManager = {
     const newPass = prompt(`Enter new Password / PIN for staff member "${name}":`);
     if (!newPass || !newPass.trim()) return;
 
+    if (newPass.trim().length < 4) {
+      alert('Password must be at least 4 characters long.');
+      return;
+    }
+
+    const apiUrl = this.getApiUrl();
+    if (!apiUrl) {
+      alert('Backend Cloud URL is not configured.');
+      return;
+    }
+
     try {
-      const res = await fetch(`${this.getApiUrl()}/api/users/${userId}/reset-password`, {
+      await this.ensureToken();
+      const res = await fetch(`${apiUrl}/api/users/${userId}/reset-password`, {
         method: 'POST',
         headers: this.getAuthHeaders(),
         body: JSON.stringify({ new_password: newPass.trim() }),
       });
+
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || 'Failed to reset password.');
+        const errData = await res.json().catch(() => ({}));
+        let errMsg = errData.detail || `Server returned HTTP ${res.status}`;
+        if (res.status === 403) {
+          errMsg = 'Permission denied. Only Admin ANNADURAI M can reset passwords.';
+        }
+        throw new Error(errMsg);
       }
+
       if (window.App) {
         window.App.showToast(`Password for ${name} reset successfully!`, 'success');
       }
     } catch (err) {
-      alert(`Error: ${err.message}`);
+      alert(`Error resetting password: ${err.message}`);
     }
   },
 

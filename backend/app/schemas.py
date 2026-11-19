@@ -25,11 +25,13 @@ class UserLogin(BaseModel):
 
 
 class UserCreate(BaseModel):
-    username: str
-    full_name: str
+    username: Optional[str] = None
+    name: Optional[str] = None
+    full_name: Optional[str] = None
     mobile_number: Optional[str] = None
     password: str
-    role: str = "VIEW_ONLY"  # Defaults to VIEW_ONLY for staff accounts
+    role: Optional[str] = "VIEW_ONLY"
+    shop_number: Optional[str] = "11066"
 
 
 class UserStatusUpdate(BaseModel):

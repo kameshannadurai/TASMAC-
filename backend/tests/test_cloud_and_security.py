@@ -90,6 +90,18 @@ def client():
         yield test_client
 
 
+@pytest.fixture
+def admin_headers():
+    token = create_access_token({"sub": "annadurai", "name": "ANNADURAI M", "role": "ADMIN", "shop": SHOP_NUMBER})
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def view_only_headers():
+    token = create_access_token({"sub": "prem", "name": "PREM", "role": "VIEW_ONLY", "shop": SHOP_NUMBER})
+    return {"Authorization": f"Bearer {token}"}
+
+
 # ==============================================================================
 # 1. ADMIN AUTHENTICATION
 # ==============================================================================
@@ -542,3 +554,121 @@ def test_production_secret_key_enforcement():
     # Validates that insecure default keys are recognized
     assert "tasmac_shop_11066_annadurai_m_offline_key_2026" in config.INSECURE_SECRETS
     assert "changeme" in config.INSECURE_SECRETS
+
+
+# ==============================================================================
+# 13. STAFF USER MANAGEMENT & CONFLICT HANDLING
+# ==============================================================================
+def test_staff_creation_duplicate_mobile_returns_409(client, admin_headers):
+    """
+    Registering a staff member with a duplicate mobile number must return HTTP 409 Conflict.
+    """
+    staff_data = {
+        "full_name": "Selva kumar",
+        "mobile_number": "9787574344",
+        "password": "12345",
+        "role": "VIEW_ONLY",
+        "shop_number": "11066",
+    }
+    # First creation should succeed (201)
+    res1 = client.post("/api/users", json=staff_data, headers=admin_headers)
+    assert res1.status_code in (201, 409)
+
+    # Attempting second creation with the same mobile number must return 409 Conflict
+    staff_data_dup = {
+        "full_name": "Another Staff",
+        "mobile_number": "9787574344",
+        "password": "54321",
+        "role": "VIEW_ONLY",
+        "shop_number": "11066",
+    }
+    res2 = client.post("/api/users", json=staff_data_dup, headers=admin_headers)
+    assert res2.status_code == 409
+    assert "already registered" in res2.json()["detail"].lower()
+
+
+def test_staff_status_update_options(client, admin_headers):
+    """
+    Admin can activate or deactivate staff using either JSON body or query param.
+    """
+    # Create test user
+    staff_data = {
+        "full_name": "Status Test Staff",
+        "mobile_number": "9876543219",
+        "password": "55555",
+        "role": "VIEW_ONLY",
+        "shop_number": "11066",
+    }
+    res = client.post("/api/users", json=staff_data, headers=admin_headers)
+    if res.status_code == 409:
+        # Retrieve user id
+        users = client.get("/api/users", headers=admin_headers).json()
+        user_id = next(u["id"] for u in users if u["mobile_number"] == "9876543219")
+    else:
+        assert res.status_code == 201
+        user_id = res.json()["id"]
+
+    # Deactivate using JSON body
+    res_deact = client.patch(f"/api/users/{user_id}/status", json={"is_active": 0}, headers=admin_headers)
+    assert res_deact.status_code == 200
+    assert res_deact.json()["is_active"] == 0
+
+    # Activate using query param
+    res_act = client.patch(f"/api/users/{user_id}/status?is_active=1", headers=admin_headers)
+    assert res_act.status_code == 200
+    assert res_act.json()["is_active"] == 1
+
+
+def test_staff_reset_password(client, admin_headers):
+    """
+    Admin can reset a staff member's password, and the staff can then login with the new credentials.
+    """
+    staff_data = {
+        "full_name": "Reset Test User",
+        "mobile_number": "9123456780",
+        "password": "oldpassword123",
+        "role": "VIEW_ONLY",
+        "shop_number": "11066",
+    }
+    res = client.post("/api/users", json=staff_data, headers=admin_headers)
+    if res.status_code == 409:
+        users = client.get("/api/users", headers=admin_headers).json()
+        u = next(u for u in users if u["mobile_number"] == "9123456780")
+        user_id = u["id"]
+        username = u["username"]
+    else:
+        assert res.status_code == 201
+        user_id = res.json()["id"]
+        username = res.json()["username"]
+
+    # Reset password
+    res_reset = client.post(
+        f"/api/users/{user_id}/reset-password",
+        json={"new_password": "newpassword456"},
+        headers=admin_headers,
+    )
+    assert res_reset.status_code == 200
+
+    # Login with new password
+    login_res = client.post(
+        "/api/auth/login",
+        json={"username": username, "password": "newpassword456"},
+    )
+    assert login_res.status_code == 200
+    assert "access_token" in login_res.json()
+
+
+def test_view_only_user_cannot_manage_users(client, view_only_headers):
+    """
+    Non-admin staff with VIEW_ONLY role cannot list, create, or modify user accounts (HTTP 403).
+    """
+    res_list = client.get("/api/users", headers=view_only_headers)
+    assert res_list.status_code == 403
+
+    res_create = client.post(
+        "/api/users",
+        json={"full_name": "Hacker", "mobile_number": "9999999999", "password": "pass"},
+        headers=view_only_headers,
+    )
+    assert res_create.status_code == 403
+

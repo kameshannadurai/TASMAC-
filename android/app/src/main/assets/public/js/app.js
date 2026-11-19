@@ -86,7 +86,9 @@ const App = {
     const activeSec = document.getElementById(`view-${viewName}`);
     if (activeSec) {
       activeSec.classList.add('active');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+      if (document.documentElement) document.documentElement.scrollLeft = 0;
+      if (document.body) document.body.scrollLeft = 0;
     }
 
     // Update nav buttons active state

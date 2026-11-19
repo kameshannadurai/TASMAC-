@@ -74,12 +74,16 @@ public class MainActivity extends AppCompatActivity {
         settings.setAllowUniversalAccessFromFileURLs(true);
         settings.setSupportMultipleWindows(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
-        settings.setLoadWithOverviewMode(true);
+        settings.setLoadWithOverviewMode(false);
         settings.setUseWideViewPort(true);
         settings.setSupportZoom(false);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+
+        // Lock horizontal viewport to screen width & disable horizontal overscroll
+        webView.setHorizontalScrollBarEnabled(false);
+        webView.setOverScrollMode(WebView.OVER_SCROLL_NEVER);
 
         // Bridge to show native Android Toast messages & perform hardware Bluetooth printing
         webView.addJavascriptInterface(new WebAppInterface(this), "AndroidNative");

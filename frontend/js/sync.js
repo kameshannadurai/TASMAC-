@@ -29,6 +29,9 @@ const SyncManager = {
   },
 
   getApiUrl() {
+    if (window.ApiConfig && typeof window.ApiConfig.getBaseUrl === 'function') {
+      return window.ApiConfig.getBaseUrl();
+    }
     if (window.AuthManager && window.AuthManager.getApiUrl) {
       const authUrl = window.AuthManager.getApiUrl();
       if (authUrl && authUrl.startsWith('http')) return authUrl;
@@ -37,14 +40,13 @@ const SyncManager = {
     if (custom && custom.startsWith('http')) return custom.replace(/\/$/, '');
 
     // Web browser environment on http/https
-    if (window.location.protocol.startsWith('http')) {
+    if (window.location && window.location.protocol && window.location.protocol.startsWith('http')) {
       return window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1')
         ? 'http://localhost:8000'
         : window.location.origin;
     }
 
-    // Inside Android APK (file://) without configured cloud URL -> Standalone Local Mode
-    return null;
+    return 'https://tasmac-shop-11066-backend.onrender.com';
   },
 
   bindNetworkEvents() {
@@ -333,12 +335,27 @@ const SyncManager = {
     resultBox.textContent = 'Testing connection to server...';
 
     try {
-      await this.testCloudConnection(url);
-      resultBox.style.background = '#e8f5e9';
-      resultBox.style.color = '#145a32';
-      resultBox.textContent = '✅ Connected successfully! TASMAC Server is active and reachable.';
-      this.cloudConnected = true;
-      this.updateStatusBadge();
+      if (window.ApiConfig && typeof window.ApiConfig.testConnection === 'function') {
+        const testRes = await window.ApiConfig.testConnection(url);
+        if (testRes.success) {
+          resultBox.style.background = '#e8f5e9';
+          resultBox.style.color = '#145a32';
+          resultBox.textContent = `✅ ${testRes.message}`;
+          this.cloudConnected = true;
+          this.updateStatusBadge();
+        } else {
+          resultBox.style.background = '#fbeee6';
+          resultBox.style.color = '#c0392b';
+          resultBox.textContent = `❌ ${testRes.message}`;
+        }
+      } else {
+        await this.testCloudConnection(url);
+        resultBox.style.background = '#e8f5e9';
+        resultBox.style.color = '#145a32';
+        resultBox.textContent = '✅ Connected successfully! TASMAC Server is active and reachable.';
+        this.cloudConnected = true;
+        this.updateStatusBadge();
+      }
     } catch (err) {
       resultBox.style.background = '#fbeee6';
       resultBox.style.color = '#c0392b';

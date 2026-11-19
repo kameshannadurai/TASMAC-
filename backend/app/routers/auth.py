@@ -117,26 +117,45 @@ def create_staff_user(
     Admin Only: Creates a staff account.
     CRITICAL SECURITY RULE: Every newly created account receives VIEW_ONLY permissions by default.
     No user can register themselves or be created as ADMIN.
+    Rejects duplicate mobile numbers with HTTP 409 Conflict.
     """
-    username = data.username.strip().lower()
-    if not username:
-        raise HTTPException(status_code=400, detail="Username is required.")
+    import re
 
-    # Check if username or mobile already exists
+    full_name = (data.full_name or data.name or "").strip()
+    if not full_name:
+        raise HTTPException(status_code=400, detail="Staff member full name is required.")
+
+    mobile = (data.mobile_number or "").strip()
+    if not mobile or len(mobile) < 10:
+        raise HTTPException(status_code=400, detail="A valid 10-digit mobile number is required.")
+
+    # Check for duplicate mobile number -> HTTP 409 Conflict
+    mob_existing = db.query(User).filter(User.mobile_number == mobile).first()
+    if mob_existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Mobile number '{mobile}' is already registered to '{mob_existing.full_name}'.",
+        )
+
+    # Auto-generate username if not explicitly given
+    username = (data.username or "").strip().lower()
+    if not username:
+        clean_prefix = re.sub(r"[^a-z0-9]", "_", full_name.lower())[:15]
+        username = f"{clean_prefix}_{mobile[-4:]}"
+
+    # Check for duplicate username -> HTTP 409 Conflict
     existing = db.query(User).filter(User.username == username).first()
     if existing:
-        raise HTTPException(status_code=400, detail=f"Username '{username}' already exists.")
-
-    if data.mobile_number:
-        mob_existing = db.query(User).filter(User.mobile_number == data.mobile_number.strip()).first()
-        if mob_existing:
-            raise HTTPException(status_code=400, detail=f"Mobile number '{data.mobile_number}' is already registered.")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Staff account with username '{username}' already exists.",
+        )
 
     # Strictly enforce VIEW_ONLY role
     new_user = User(
         username=username,
-        full_name=data.full_name.strip() or "Staff Member",
-        mobile_number=data.mobile_number.strip() if data.mobile_number else None,
+        full_name=full_name,
+        mobile_number=mobile,
         shop_number="11066",
         role="VIEW_ONLY",  # ALWAYS VIEW_ONLY FOR NEW ACCOUNTS
         password_hash=hash_password(data.password),
@@ -155,7 +174,7 @@ def create_staff_user(
         entity_id=new_user.id or 0,
         reference_number=new_user.username,
         action="CREATE",
-        changes_json=f"Created staff account '{new_user.username}' with VIEW_ONLY role.",
+        changes_json=f"Created staff account '{new_user.username}' ({new_user.full_name}) with VIEW_ONLY role.",
     )
     db.add(audit)
     db.commit()
@@ -166,11 +185,12 @@ def create_staff_user(
 @router.patch("/users/{user_id}/status", response_model=UserResponse)
 def update_user_status(
     user_id: int,
-    status_data: UserStatusUpdate,
+    status_data: Optional[UserStatusUpdate] = None,
+    is_active: Optional[int] = None,
     db: Session = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
-    """Admin Only: Activates or deactivates a staff account."""
+    """Admin Only: Activates or deactivates a staff account. Accepts JSON body or query param."""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
@@ -178,11 +198,30 @@ def update_user_status(
     if user.username == "annadurai" or user.role == "ADMIN":
         raise HTTPException(status_code=400, detail="Cannot deactivate the Primary Shop Administrator.")
 
-    user.is_active = status_data.is_active
+    target_status = 1
+    if status_data is not None:
+        target_status = 1 if status_data.is_active else 0
+    elif is_active is not None:
+        target_status = 1 if is_active else 0
+
+    user.is_active = target_status
     db.commit()
     db.refresh(user)
 
     action_text = "Activated" if user.is_active == 1 else "Deactivated"
+    audit = AuditHistory(
+        user_name=admin.full_name,
+        user_role=admin.role,
+        entity_type="USER_MANAGEMENT",
+        entity_id=user.id or 0,
+        reference_number=user.username,
+        action="UPDATE",
+        changes_json=f"{action_text} staff account '{user.username}'.",
+    )
+    db.add(audit)
+    db.commit()
+
+    return UserResponse.model_validate(user)
     audit = AuditHistory(
         user_name=admin.full_name,
         user_role=admin.role,
