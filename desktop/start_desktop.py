@@ -18,8 +18,8 @@ import uvicorn
 from backend.app.main import app
 
 PORT = 8000
-HOST = "127.0.0.1"
-URL = f"http://{HOST}:{PORT}"
+HOST = "0.0.0.0"
+URL = f"http://127.0.0.1:{PORT}"
 
 
 def open_browser():
