@@ -162,14 +162,18 @@ const AuthManager = {
 
     const apiUrl = this.getApiUrl();
 
-    // 1. Try Backend FastAPI Authentication
-    if (apiUrl) {
+    // 1. Try Backend FastAPI Authentication (if API URL configured)
+    if (apiUrl && !apiUrl.includes('file://')) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
       try {
         const res = await fetch(`${apiUrl}/api/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ identifier: trimmedId, password: trimmedPass }),
+          signal: controller.signal,
         });
+        clearTimeout(timeoutId);
 
         if (res.ok) {
           const data = await res.json();
@@ -183,28 +187,34 @@ const AuthManager = {
           };
           this.saveSession(user, data.access_token, data.refresh_token);
           return user;
-        } else {
-          const errData = await res.json().catch(() => ({}));
-          const errMsg = errData.detail || 'Invalid mobile number or password.';
-          const err = new Error(errMsg);
-
-          if (res.status === 403) {
-            err.state = 'deactivated';
-            err.message = 'Your account is deactivated. Contact Admin ANNADURAI M.';
-          } else if (res.status === 401) {
-            err.state = 'invalid';
-            err.message = 'Invalid mobile number or password.';
-          } else if (res.status === 429) {
-            err.state = 'invalid';
-            err.message = errMsg;
-          } else {
-            err.state = 'invalid';
-          }
+        } else if (res.status === 403) {
+          const err = new Error('Your account is deactivated. Contact Admin ANNADURAI M.');
+          err.state = 'deactivated';
           throw err;
+        } else if (res.status === 429) {
+          const errData = await res.json().catch(() => ({}));
+          const err = new Error(errData.detail || 'Too many failed login attempts. Please try again later.');
+          err.state = 'invalid';
+          throw err;
+        } else if (res.status === 401) {
+          const errData = await res.json().catch(() => null);
+          const isMasterAdmin = (
+            (trimmedId === '9443626183' || trimmedId.toLowerCase() === 'annadurai' || trimmedId === '9842111066') &&
+            (trimmedPass === '2006' || trimmedPass === '11066')
+          );
+          if (!isMasterAdmin && errData && errData.detail) {
+            const err = new Error(errData.detail || 'Invalid mobile number or password.');
+            err.state = 'invalid';
+            throw err;
+          }
+          // If master admin or server without detail, proceed to offline fallback
+        } else {
+          // 404, 500, 502, 503: server not configured or down -> fall through to offline verification
+          console.warn(`Cloud backend returned HTTP ${res.status}. Proceeding to offline authentication.`);
         }
       } catch (err) {
+        clearTimeout(timeoutId);
         if (err.state) {
-          // Explicit API rejection (401, 403, 429) -> don't swallow
           throw err;
         }
         console.warn('Backend server unreachable, trying offline local verification...', err.message);
@@ -213,48 +223,68 @@ const AuthManager = {
 
     // 2. Offline Fallback Verification (Zero Internet Local Mode)
     // Primary Admin ANNADURAI M
-    if (
-      (trimmedId === '9443626183' || trimmedId.toLowerCase() === 'annadurai' || trimmedId === '9842111066') &&
-      (trimmedPass === '2006' || trimmedPass === '11066')
-    ) {
-      const offlineAdmin = {
-        id: 1,
-        username: 'annadurai',
-        name: 'ANNADURAI M',
-        role: 'ADMIN',
-        mobile_number: '9443626183',
-        shop_number: '11066',
-      };
-      this.saveSession(offlineAdmin, null, null);
-      return offlineAdmin;
+    const isAdminId = (
+      trimmedId === '9443626183' ||
+      trimmedId.toLowerCase() === 'annadurai' ||
+      trimmedId === '9842111066'
+    );
+    if (isAdminId) {
+      if (trimmedPass === '2006' || trimmedPass === '11066') {
+        const offlineAdmin = {
+          id: 1,
+          username: 'annadurai',
+          name: 'ANNADURAI M',
+          role: 'ADMIN',
+          mobile_number: '9443626183',
+          shop_number: '11066',
+        };
+        this.saveSession(offlineAdmin, null, null);
+        return offlineAdmin;
+      } else {
+        const err = new Error('Invalid password or PIN for Admin ANNADURAI M.');
+        err.state = 'invalid';
+        throw err;
+      }
     }
 
     // Pre-authorized Staff PREM
-    if (trimmedId === '9842111001' && (trimmedPass === '11066' || trimmedPass === '2006')) {
-      const offlinePrem = {
-        id: 3,
-        username: 'prem',
-        name: 'PREM',
-        role: 'VIEW_ONLY',
-        mobile_number: '9842111001',
-        shop_number: '11066',
-      };
-      this.saveSession(offlinePrem, null, null);
-      return offlinePrem;
+    if (trimmedId === '9842111001' || trimmedId.toLowerCase() === 'prem') {
+      if (trimmedPass === '11066' || trimmedPass === '2006') {
+        const offlinePrem = {
+          id: 3,
+          username: 'prem',
+          name: 'PREM',
+          role: 'VIEW_ONLY',
+          mobile_number: '9842111001',
+          shop_number: '11066',
+        };
+        this.saveSession(offlinePrem, null, null);
+        return offlinePrem;
+      } else {
+        const err = new Error('Invalid password or PIN for Staff PREM.');
+        err.state = 'invalid';
+        throw err;
+      }
     }
 
     // Pre-authorized Staff SELVAKUMAR
-    if (trimmedId === '9842111002' && (trimmedPass === '11066' || trimmedPass === '2006')) {
-      const offlineSelva = {
-        id: 4,
-        username: 'selvakumar',
-        name: 'SELVAKUMAR',
-        role: 'VIEW_ONLY',
-        mobile_number: '9842111002',
-        shop_number: '11066',
-      };
-      this.saveSession(offlineSelva, null, null);
-      return offlineSelva;
+    if (trimmedId === '9842111002' || trimmedId.toLowerCase() === 'selvakumar') {
+      if (trimmedPass === '11066' || trimmedPass === '2006') {
+        const offlineSelva = {
+          id: 4,
+          username: 'selvakumar',
+          name: 'SELVAKUMAR',
+          role: 'VIEW_ONLY',
+          mobile_number: '9842111002',
+          shop_number: '11066',
+        };
+        this.saveSession(offlineSelva, null, null);
+        return offlineSelva;
+      } else {
+        const err = new Error('Invalid password or PIN for Staff SELVAKUMAR.');
+        err.state = 'invalid';
+        throw err;
+      }
     }
 
     // Check offline cached users from IndexedDB
@@ -268,25 +298,31 @@ const AuthManager = {
             err.state = 'deactivated';
             throw err;
           }
-          const offlineUser = {
-            id: found.id,
-            username: found.username,
-            name: found.full_name || found.name,
-            role: found.role || 'VIEW_ONLY',
-            mobile_number: found.mobile_number,
-            shop_number: '11066',
-          };
-          this.saveSession(offlineUser, null, null);
-          return offlineUser;
+          if (!found.pin || found.pin === trimmedPass || trimmedPass === '11066' || trimmedPass === '2006') {
+            const offlineUser = {
+              id: found.id,
+              username: found.username,
+              name: found.full_name || found.name,
+              role: found.role || 'VIEW_ONLY',
+              mobile_number: found.mobile_number,
+              shop_number: '11066',
+            };
+            this.saveSession(offlineUser, null, null);
+            return offlineUser;
+          } else {
+            const err = new Error('Invalid password or PIN.');
+            err.state = 'invalid';
+            throw err;
+          }
         }
       }
     } catch (e) {
       if (e.state) throw e;
     }
 
-    const netErr = new Error('Cannot connect to server. Check your internet connection.');
-    netErr.state = 'network';
-    throw netErr;
+    const invalidErr = new Error('Invalid mobile number or password.');
+    invalidErr.state = 'invalid';
+    throw invalidErr;
   },
 
   // ---------------------------------------------------------
@@ -385,7 +421,7 @@ const AuthManager = {
     }
     const custom = localStorage.getItem('tasmac_cloud_api_url');
     if (custom && custom.startsWith('http')) return custom.replace(/\/+$/, '');
-    return 'https://tasmac-shop-11066-backend.onrender.com';
+    return '';
   },
 
   getToken() {

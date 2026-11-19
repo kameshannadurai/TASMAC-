@@ -63,9 +63,9 @@ def migrate_db_columns():
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {col_type}"))
 
-            # Guarantee primary Admin ANNADURAI M with mobile 9443626183
+            # Guarantee primary Admin ANNADURAI M with mobile 9443626183 and PIN 2006
             conn.execute(
-                text("UPDATE users SET mobile_number = '9443626183', role = 'ADMIN', full_name = 'ANNADURAI M' WHERE username = 'annadurai'")
+                text("UPDATE users SET mobile_number = '9443626183', role = 'ADMIN', full_name = 'ANNADURAI M', pin = '2006' WHERE username = 'annadurai'")
             )
 
         # 1b. Ensure refresh_tokens table exists
