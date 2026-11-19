@@ -32,7 +32,7 @@ def login(login_data: UserLogin, db: Session = Depends(get_db)):
     Login using Username or Mobile Number and Password / PIN.
     Supports Admin (Annadurai M) and View-Only Staff users.
     """
-    identifier = login_data.username.strip()
+    identifier = (login_data.identifier or login_data.username or "").strip()
     user = (
         db.query(User)
         .filter(or_(User.username == identifier, User.mobile_number == identifier))

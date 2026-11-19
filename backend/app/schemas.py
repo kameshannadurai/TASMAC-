@@ -18,7 +18,8 @@ class UserBase(BaseModel):
 
 
 class UserLogin(BaseModel):
-    username: str = "annadurai"
+    username: Optional[str] = "annadurai"
+    identifier: Optional[str] = None
     password: Optional[str] = None
     pin: Optional[str] = "11066"
 

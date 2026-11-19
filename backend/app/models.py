@@ -157,3 +157,14 @@ class AuditHistory(Base):
     changes_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
+class ProcessedSyncMutation(Base):
+    __tablename__ = "processed_sync_mutations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_mutation_id = Column(String(100), unique=True, index=True, nullable=False)
+    device_id = Column(String(100), nullable=True)
+    table_name = Column(String(50), nullable=False)
+    applied_at = Column(DateTime, default=datetime.utcnow)
+
+

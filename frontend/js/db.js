@@ -113,9 +113,12 @@ class TasmacDatabase {
       return new Promise((resolve, reject) => {
         const tx = db.transaction(['pending_sync_queue'], 'readwrite');
         const store = tx.objectStore('pending_sync_queue');
+        const client_mutation_id = 'mut_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
         const item = {
+          client_mutation_id,
           action, // 'CREATE' | 'UPDATE' | 'DELETE'
           entity_type, // 'REMITTANCE' | 'VENDOR_RECEIPT'
+          table: entity_type === 'REMITTANCE' ? 'remittances' : 'vendor_receipts',
           entity_id: Number(entity_id) || 0,
           data: data || {},
           created_at: new Date().toISOString(),

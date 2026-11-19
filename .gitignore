@@ -13,11 +13,13 @@ android/local.properties
 android/*.iml
 android/app/*.iml
 
-# SQLite temporary WAL/SHM files
+# SQLite temporary WAL/SHM files & safety backups
 *.db-shm
 *.db-wal
+*.backup_*
 
 # OS & Editor files
 .DS_Store
 Thumbs.db
 .vscode/
+

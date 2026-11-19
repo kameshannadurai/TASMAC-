@@ -1,6 +1,8 @@
 """
 TASMAC Shop No. 11066 - Annadurai M
 Multi-Device Internet Synchronization Engine (Pull & Push Delta Sync)
+Supports Supabase PostgreSQL & Local Offline SQLite
+Strictly Enforces Role-Based Permissions & Duplicate Prevention
 """
 
 from typing import List, Optional, Dict, Any
@@ -10,10 +12,20 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
 from ..database import get_db
-from ..models import User, DailyRemittance, VendorReceipt, VendorReceiptLiquorItem, VendorReceiptBeerItem, AuditHistory
+from ..models import (
+    User,
+    DailyRemittance,
+    VendorReceipt,
+    VendorReceiptLiquorItem,
+    VendorReceiptBeerItem,
+    BottleInventoryTransaction,
+    AuditHistory,
+    ProcessedSyncMutation,
+)
 from ..schemas import SyncPushRequest, SyncPushResponse, SyncPullResponse
-from ..deps import get_current_user_optional, require_admin, require_authenticated
+from ..deps import require_authenticated, require_admin
 from ..calculations import calculate_remittance, calculate_receipt_totals
+from .. import crud
 
 router = APIRouter(prefix="/api/sync", tags=["Multi-Device Synchronization"])
 
@@ -22,12 +34,12 @@ router = APIRouter(prefix="/api/sync", tags=["Multi-Device Synchronization"])
 def pull_sync_data(
     since: Optional[str] = Query(None, description="ISO timestamp of last sync"),
     db: Session = Depends(get_db),
-    user: Optional[User] = Depends(get_current_user_optional),
+    user: User = Depends(require_authenticated),
 ):
     """
     Pulls cloud database records for automatic multi-device synchronization.
-    If 'since' is provided, returns changes since that timestamp.
-    All authorized devices (Admin and View-Only) can pull records.
+    If 'since' is provided, returns delta changes since that timestamp.
+    All authorized devices (Admin ANNADURAI M and View-Only staff) can pull records.
     """
     since_dt = None
     if since:
@@ -114,9 +126,9 @@ def pull_sync_data(
             "updated_at": rec.updated_at.isoformat() if rec.updated_at else datetime.utcnow().isoformat(),
         })
 
-    # Audit logs (only provided if user is authenticated admin, otherwise empty)
+    # Audit logs (only provided if user is authenticated admin)
     audit_list = []
-    if user and user.role == "ADMIN":
+    if user.role == "ADMIN":
         logs = db.query(AuditHistory).order_by(desc(AuditHistory.created_at)).limit(50).all()
         for log in logs:
             audit_list.append({
@@ -148,12 +160,25 @@ def push_sync_data(
     """
     Pushes offline or batched mutations to the cloud database.
     CRITICAL SECURITY RULE: Only Admin Annadurai M can push mutations to the cloud.
-    View-only users are strictly rejected with 403 Forbidden.
+    View-only users are strictly rejected with HTTP 403 Forbidden.
+    Guarantees duplicate mutation prevention and conflict detection.
     """
     applied = 0
     now = datetime.utcnow()
 
     for m in payload.mutations:
+        mutation_id = getattr(m, "client_mutation_id", None)
+        # Duplicate Prevention Check: If mutation was already processed, skip
+        if mutation_id:
+            already_done = (
+                db.query(ProcessedSyncMutation)
+                .filter(ProcessedSyncMutation.client_mutation_id == mutation_id)
+                .first()
+            )
+            if already_done:
+                applied += 1
+                continue
+
         table = m.table.lower()
         action = m.action.upper()
         data = m.data
@@ -164,11 +189,15 @@ def push_sync_data(
 
             if action == "DELETE":
                 if existing:
+                    # Remove corresponding bottle inventory transaction
+                    db.query(BottleInventoryTransaction).filter(
+                        BottleInventoryTransaction.transaction_type == "REMITTANCE_RETURN",
+                        BottleInventoryTransaction.reference_id == existing.id,
+                    ).delete()
                     db.delete(existing)
                     applied += 1
             else:
-                # CREATE or UPDATE
-                # Run central verified calculation formulas
+                # CREATE or UPDATE with verified calculations
                 calc = calculate_remittance(
                     scan_amount=data.get("scan_amount", 0.0),
                     upi_amount=data.get("upi_amount", 0.0),
@@ -182,11 +211,13 @@ def push_sync_data(
                 )
 
                 if existing:
+                    # Conflict handling: Merge latest updates
                     for k, v in calc.items():
                         if hasattr(existing, k):
                             setattr(existing, k, v)
                     existing.notes = data.get("notes", "")
                     existing.updated_at = now
+                    rem_target = existing
                 else:
                     new_item = DailyRemittance(
                         date=entry_date,
@@ -196,8 +227,11 @@ def push_sync_data(
                         updated_at=now,
                     )
                     db.add(new_item)
-                db.flush()
-                applied += 1
+                    db.flush()
+                    rem_target = new_item
+
+                # Synchronize bottle inventory transaction
+                crud.sync_inventory_transaction_for_remittance(db, rem_target)
 
                 # Log to audit history
                 audit = AuditHistory(
@@ -205,12 +239,13 @@ def push_sync_data(
                     user_role=admin.role,
                     device_id=payload.device_id,
                     entity_type="DAILY_REMITTANCE",
-                    entity_id=existing.id if existing else (new_item.id or 0),
+                    entity_id=rem_target.id or 0,
                     reference_number=str(entry_date),
                     action=action,
                     changes_json=f"{action} remittance for {entry_date} via multi-device sync.",
                 )
                 db.add(audit)
+                applied += 1
 
         elif table == "vendor_receipts":
             receipt_num = data.get("receipt_number", "")
@@ -219,6 +254,10 @@ def push_sync_data(
 
             if action == "DELETE":
                 if existing:
+                    db.query(BottleInventoryTransaction).filter(
+                        BottleInventoryTransaction.transaction_type == "VENDOR_COLLECTION",
+                        BottleInventoryTransaction.reference_id == existing.id,
+                    ).delete()
                     db.delete(existing)
                     applied += 1
             else:
@@ -238,6 +277,7 @@ def push_sync_data(
                     existing.total_payable = totals["total_payable"]
                     existing.notes = data.get("notes", "")
                     existing.updated_at = now
+                    rec_target = existing
                 else:
                     new_rec = VendorReceipt(
                         receipt_number=receipt_num,
@@ -259,8 +299,11 @@ def push_sync_data(
                         updated_at=now,
                     )
                     db.add(new_rec)
-                db.flush()
-                applied += 1
+                    db.flush()
+                    rec_target = new_rec
+
+                # Synchronize bottle inventory transaction
+                crud.sync_inventory_transaction_for_receipt(db, rec_target)
 
                 # Log to audit history
                 audit = AuditHistory(
@@ -268,12 +311,23 @@ def push_sync_data(
                     user_role=admin.role,
                     device_id=payload.device_id,
                     entity_type="VENDOR_RECEIPT",
-                    entity_id=existing.id if existing else (new_rec.id or 0),
+                    entity_id=rec_target.id or 0,
                     reference_number=receipt_num,
                     action=action,
                     changes_json=f"{action} receipt {receipt_num} via multi-device sync.",
                 )
                 db.add(audit)
+                applied += 1
+
+        # Record mutation in ProcessedSyncMutation to prevent duplicates
+        if mutation_id:
+            record_done = ProcessedSyncMutation(
+                client_mutation_id=mutation_id,
+                device_id=payload.device_id,
+                table_name=table,
+                applied_at=now,
+            )
+            db.add(record_done)
 
     db.commit()
 

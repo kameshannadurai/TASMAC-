@@ -183,7 +183,9 @@ def calculate_receipt_totals(
         "liquor_items": processed_liquor,
         "beer_items": processed_beer,
         "total_liquor_qty": total_liquor_qty,
+        "total_liquor_amount": float(total_liquor_amount),
         "total_beer_qty": total_beer_qty,
+        "total_beer_amount": float(total_beer_amount),
         "total_bottles": total_bottles,
         "total_payable": float(total_payable),
     }

@@ -52,7 +52,7 @@ const SyncManager = {
       this.isOnline = true;
       this.updateStatusBadge();
       if (window.App) {
-        window.App.showToast('Internet connection active. Checking sync...', 'info');
+        window.App.showToast('Internet connection active. Synchronizing data...', 'info');
       }
       this.triggerSync();
     });
@@ -67,6 +67,22 @@ const SyncManager = {
     });
 
     window.addEventListener('focus', () => {
+      if (navigator.onLine) {
+        this.isOnline = true;
+        this.triggerSync();
+      }
+    });
+
+    // Foreground return via Page Visibility API
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        this.isOnline = true;
+        this.triggerSync();
+      }
+    });
+
+    // Capacitor / Cordova app resume event
+    document.addEventListener('resume', () => {
       if (navigator.onLine) {
         this.isOnline = true;
         this.triggerSync();
@@ -112,15 +128,28 @@ const SyncManager = {
       const pendingQueue = await window.tasmacDB.getPendingSyncQueue();
       if (pendingQueue && pendingQueue.length > 0) {
         if (window.AuthManager && window.AuthManager.isAdmin()) {
+          const deviceId = localStorage.getItem('tasmac_device_id') || ('device_' + Math.random().toString(36).substr(2, 8));
+          localStorage.setItem('tasmac_device_id', deviceId);
+
+          const formattedMutations = pendingQueue.map((item) => ({
+            table: item.table || (item.entity_type === 'REMITTANCE' ? 'remittances' : 'vendor_receipts'),
+            action: item.action,
+            data: item.data,
+            client_mutation_id: item.client_mutation_id || `mut_${item.id}_${item.created_at || Date.now()}`,
+          }));
+
           const resPush = await fetch(`${apiUrl}/api/sync/push`, {
             method: 'POST',
             headers: window.AuthManager.getAuthHeaders(),
-            body: JSON.stringify({ mutations: pendingQueue }),
+            body: JSON.stringify({
+              mutations: formattedMutations,
+              device_id: deviceId,
+            }),
           });
 
           if (resPush.ok) {
             const pushResult = await resPush.json();
-            pushedCount = pushResult.applied || 0;
+            pushedCount = pushResult.applied_count || pushResult.applied || 0;
             // Clean processed queue items
             for (const item of pendingQueue) {
               await window.tasmacDB.removeSyncQueueItem(item.id);
