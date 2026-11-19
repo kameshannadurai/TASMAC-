@@ -127,7 +127,26 @@ const SyncManager = {
       // -------------------------------------------------------------
       // STEP 1: PUSH PENDING MUTATIONS (Admin Only)
       // -------------------------------------------------------------
-      const pendingQueue = await window.tasmacDB.getPendingSyncQueue();
+      let pendingQueue = await window.tasmacDB.getPendingSyncQueue();
+
+      // If pending queue is empty, ensure all existing local records are synced to the server once
+      if ((!pendingQueue || pendingQueue.length === 0) && localStorage.getItem('tasmac_all_records_synced') !== 'true') {
+        try {
+          const allRemittances = await window.tasmacDB.getAllRemittances();
+          for (const rem of allRemittances) {
+            await window.tasmacDB.enqueueSync('CREATE', 'REMITTANCE', rem.id || 0, rem);
+          }
+          const allReceipts = await window.tasmacDB.getAllVendorReceipts();
+          for (const rc of allReceipts) {
+            await window.tasmacDB.enqueueSync('CREATE', 'VENDOR_RECEIPT', rc.id || 0, rc);
+          }
+          pendingQueue = await window.tasmacDB.getPendingSyncQueue();
+          localStorage.setItem('tasmac_all_records_synced', 'true');
+        } catch (e) {
+          console.warn('Auto-enqueue local records for initial sync notice:', e);
+        }
+      }
+
       if (pendingQueue && pendingQueue.length > 0) {
         if (window.AuthManager && window.AuthManager.isAdmin()) {
           const deviceId = localStorage.getItem('tasmac_device_id') || ('device_' + Math.random().toString(36).substr(2, 8));
