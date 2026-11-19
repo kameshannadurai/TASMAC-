@@ -11,7 +11,7 @@
 
 const ApiConfig = {
   STORAGE_KEY: 'tasmac_cloud_api_url',
-  DEFAULT_CLOUD_URL: '',
+  DEFAULT_CLOUD_URL: 'https://tasmac-shop-11066-api.onrender.com',
 
   /**
    * Resolves the active API base URL.

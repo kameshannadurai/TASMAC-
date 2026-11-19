@@ -421,7 +421,7 @@ const AuthManager = {
     }
     const custom = localStorage.getItem('tasmac_cloud_api_url');
     if (custom && custom.startsWith('http')) return custom.replace(/\/+$/, '');
-    return '';
+    return 'https://tasmac-shop-11066-api.onrender.com';
   },
 
   getToken() {
@@ -437,13 +437,41 @@ const AuthManager = {
   async ensureToken() {
     const t = this.getToken();
     if (t) return t;
-    return await this.refreshAccessToken();
+    const rt = await this.refreshAccessToken();
+    if (rt) return rt;
+
+    // Silent background authentication when server is reachable
+    const apiUrl = this.getApiUrl();
+    if (apiUrl && this.currentUser && this.currentUser.role === 'ADMIN') {
+      try {
+        const ident = this.currentUser.mobile_number || '9443626183';
+        const pass = '2006';
+        const res = await fetch(`${apiUrl}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifier: ident, password: pass }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          this.token = data.access_token;
+          localStorage.setItem('tasmac_auth_token', data.access_token);
+          if (data.refresh_token) {
+            this.setSecureRefreshToken(data.refresh_token);
+          }
+          return data.access_token;
+        }
+      } catch (e) {
+        console.warn('Silent cloud token acquisition skipped:', e);
+      }
+    }
+    return null;
   },
 
   getAuthHeaders() {
     const headers = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
+      'X-Shop-Number': '11066',
     };
     const t = this.getToken();
     if (t) {

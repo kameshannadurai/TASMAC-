@@ -46,7 +46,7 @@ const SyncManager = {
         : window.location.origin;
     }
 
-    return 'https://tasmac-shop-11066-backend.onrender.com';
+    return 'https://tasmac-shop-11066-api.onrender.com';
   },
 
   bindNetworkEvents() {
@@ -124,6 +124,9 @@ const SyncManager = {
     let pushedCount = 0;
 
     try {
+      if (window.AuthManager && window.AuthManager.ensureToken) {
+        await window.AuthManager.ensureToken();
+      }
       // -------------------------------------------------------------
       // STEP 1: PUSH PENDING MUTATIONS (Admin Only)
       // -------------------------------------------------------------
@@ -254,7 +257,7 @@ const SyncManager = {
       pill.className = 'badge-sync state-online';
       pill.innerHTML = `
         <span class="badge-dot dot-online"></span>
-        <span id="sync-status-label">ONLINE · ☁️ Synced</span>
+        <span id="sync-status-label">ONLINE · ☁️ CLOUD SYNC</span>
       `;
     } else if (this.isOnline) {
       pill.className = 'badge-sync state-online';

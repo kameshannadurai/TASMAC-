@@ -7,7 +7,7 @@ Strictly Enforces Role-Based Permissions & Duplicate Prevention
 
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
@@ -23,7 +23,8 @@ from ..models import (
     ProcessedSyncMutation,
 )
 from ..schemas import SyncPushRequest, SyncPushResponse, SyncPullResponse
-from ..deps import require_authenticated, require_admin
+from ..deps import require_authenticated, require_admin, get_current_user_optional
+from ..config import SHOP_NUMBER
 from ..calculations import calculate_remittance, calculate_receipt_totals
 from .. import crud
 
