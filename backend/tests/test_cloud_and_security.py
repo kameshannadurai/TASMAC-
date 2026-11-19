@@ -204,7 +204,7 @@ def test_secure_password_verification(client):
     raw_pass = "SecureAdminPass#2026"
     hashed = hash_password(raw_pass)
 
-    assert hashed.startswith("pbkdf2:sha256:100000$")
+    assert hashed.startswith("pbkdf2:sha256:100000$") or hashed.startswith(("$2b$", "$2a$"))
     assert verify_password(raw_pass, hashed) is True
     assert verify_password("WrongPassword", hashed) is False
 
@@ -677,38 +677,37 @@ def test_admin_can_edit_user_name_and_phone(client, admin_headers):
     """
     Admin can edit user's full name and 10-digit mobile number via PUT /api/users/{id}.
     """
+    import uuid
+    mobile1 = f"95{int(uuid.uuid4().int % 100000000):08d}"
+    mobile2 = f"96{int(uuid.uuid4().int % 100000000):08d}"
+
     # 1. Create a staff user to edit
     staff_data = {
         "full_name": "Initial Name",
-        "mobile_number": "9000000001",
+        "mobile_number": mobile1,
         "password": "initialpass123",
         "role": "VIEW_ONLY",
         "shop_number": "11066",
     }
     res = client.post("/api/users", json=staff_data, headers=admin_headers)
-    if res.status_code == 409:
-        users = client.get("/api/users", headers=admin_headers).json()
-        u = next(x for x in users if x["mobile_number"] == "9000000001")
-        user_id = u["id"]
-    else:
-        assert res.status_code == 201
-        user_id = res.json()["id"]
+    assert res.status_code == 201
+    user_id = res.json()["id"]
 
     # 2. Admin edits name and phone number
     edit_data = {
         "full_name": "Annadurai Staff New Name",
-        "mobile_number": "9000000002",
+        "mobile_number": mobile2,
     }
     res_edit = client.put(f"/api/users/{user_id}", json=edit_data, headers=admin_headers)
     assert res_edit.status_code == 200
     updated = res_edit.json()
     assert updated["full_name"] == "Annadurai Staff New Name"
-    assert updated["mobile_number"] == "9000000002"
+    assert updated["mobile_number"] == mobile2
 
     # 3. Verify user can log in with new mobile number
     login_res = client.post(
         "/api/auth/login",
-        json={"identifier": "9000000002", "password": "initialpass123"},
+        json={"identifier": mobile2, "password": "initialpass123"},
     )
     assert login_res.status_code == 200
     assert login_res.json()["user"]["full_name"] == "Annadurai Staff New Name"

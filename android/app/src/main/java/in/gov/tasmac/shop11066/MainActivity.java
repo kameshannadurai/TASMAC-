@@ -35,6 +35,14 @@ import androidx.core.content.ContextCompat;
 
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyStore;
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
+import android.content.SharedPreferences;
 import java.util.Set;
 import java.util.UUID;
 
@@ -74,8 +82,9 @@ public class MainActivity extends AppCompatActivity {
         settings.setAllowUniversalAccessFromFileURLs(true);
         settings.setSupportMultipleWindows(false);
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
-        settings.setLoadWithOverviewMode(false);
-        settings.setUseWideViewPort(true);
+        settings.setLoadWithOverviewMode(true);
+        settings.setUseWideViewPort(false);
+        settings.setTextZoom(100);
         settings.setSupportZoom(false);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
@@ -152,9 +161,104 @@ public class MainActivity extends AppCompatActivity {
      */
     public class WebAppInterface {
         Context mContext;
+        private static final String KEY_ALIAS = "TASMAC_SECURE_KEY_11066";
+        private static final String KEYSTORE_PROVIDER = "AndroidKeyStore";
+        private static final String PREF_SECURE_STORAGE = "tasmac_keystore_storage";
 
         WebAppInterface(Context c) {
             mContext = c;
+        }
+
+        private SecretKey getOrCreateSecretKey() throws Exception {
+            KeyStore keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER);
+            keyStore.load(null);
+            if (!keyStore.containsAlias(KEY_ALIAS)) {
+                KeyGenerator keyGenerator = KeyGenerator.getInstance(
+                        KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_PROVIDER);
+                KeyGenParameterSpec spec = new KeyGenParameterSpec.Builder(
+                        KEY_ALIAS,
+                        KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+                        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                        .setKeySize(256)
+                        .build();
+                keyGenerator.init(spec);
+                return keyGenerator.generateKey();
+            }
+            return ((KeyStore.SecretKeyEntry) keyStore.getEntry(KEY_ALIAS, null)).getSecretKey();
+        }
+
+        /**
+         * Android Keystore Hardware-Backed AES-GCM Encrypted Token Storage
+         */
+        @JavascriptInterface
+        public boolean setSecureToken(String key, String value) {
+            try {
+                if (key == null || value == null) return false;
+                SecretKey secretKey = getOrCreateSecretKey();
+                Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                cipher.init(Cipher.ENCRYPT_MODE, secretKey);
+                byte[] iv = cipher.getIV();
+                byte[] encrypted = cipher.doFinal(value.getBytes(StandardCharsets.UTF_8));
+
+                byte[] combined = new byte[1 + iv.length + encrypted.length];
+                combined[0] = (byte) iv.length;
+                System.arraycopy(iv, 0, combined, 1, iv.length);
+                System.arraycopy(encrypted, 0, combined, 1 + iv.length, encrypted.length);
+
+                String encoded = Base64.encodeToString(combined, Base64.NO_WRAP);
+                SharedPreferences prefs = mContext.getSharedPreferences(PREF_SECURE_STORAGE, Context.MODE_PRIVATE);
+                prefs.edit().putString(key, encoded).apply();
+                return true;
+            } catch (Exception e) {
+                Log.e(TAG, "setSecureToken error", e);
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public String getSecureToken(String key) {
+            try {
+                if (key == null) return "";
+                SharedPreferences prefs = mContext.getSharedPreferences(PREF_SECURE_STORAGE, Context.MODE_PRIVATE);
+                String encoded = prefs.getString(key, null);
+                if (encoded == null || encoded.isEmpty()) return "";
+
+                byte[] combined = Base64.decode(encoded, Base64.NO_WRAP);
+                if (combined == null || combined.length < 13) return "";
+
+                int ivLength = combined[0] & 0xFF;
+                byte[] iv = new byte[ivLength];
+                System.arraycopy(combined, 1, iv, 0, ivLength);
+
+                int encLength = combined.length - 1 - ivLength;
+                byte[] encrypted = new byte[encLength];
+                System.arraycopy(combined, 1 + ivLength, encrypted, 0, encLength);
+
+                SecretKey secretKey = getOrCreateSecretKey();
+                Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                GCMParameterSpec spec = new GCMParameterSpec(128, iv);
+                cipher.init(Cipher.DECRYPT_MODE, secretKey, spec);
+                byte[] decrypted = cipher.doFinal(encrypted);
+
+                return new String(decrypted, StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                Log.e(TAG, "getSecureToken error", e);
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public boolean removeSecureToken(String key) {
+            try {
+                if (key == null) return false;
+                SharedPreferences prefs = mContext.getSharedPreferences(PREF_SECURE_STORAGE, Context.MODE_PRIVATE);
+                prefs.edit().remove(key).apply();
+                return true;
+            } catch (Exception e) {
+                Log.e(TAG, "removeSecureToken error", e);
+                return false;
+            }
         }
 
         @JavascriptInterface

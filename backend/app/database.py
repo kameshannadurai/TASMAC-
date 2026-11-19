@@ -63,10 +63,46 @@ def migrate_db_columns():
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {col_type}"))
 
-            # Guarantee primary Admin ANNADURAI M
+            # Guarantee primary Admin ANNADURAI M with mobile 9443626183
             conn.execute(
-                text("UPDATE users SET mobile_number = '9842111066', role = 'ADMIN' WHERE username = 'annadurai'")
+                text("UPDATE users SET mobile_number = '9443626183', role = 'ADMIN', full_name = 'ANNADURAI M' WHERE username = 'annadurai'")
             )
+
+        # 1b. Ensure refresh_tokens table exists
+        if "refresh_tokens" not in table_names:
+            if is_sqlite:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS refresh_tokens (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        token_hash VARCHAR(128) NOT NULL UNIQUE,
+                        jti VARCHAR(64) NOT NULL UNIQUE,
+                        expires_at DATETIME NOT NULL,
+                        revoked INTEGER NOT NULL DEFAULT 0,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        replaced_by VARCHAR(64),
+                        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS ix_refresh_tokens_token_hash ON refresh_tokens (token_hash);
+                    CREATE INDEX IF NOT EXISTS ix_refresh_tokens_jti ON refresh_tokens (jti);
+                    CREATE INDEX IF NOT EXISTS ix_refresh_tokens_user_id ON refresh_tokens (user_id);
+                """))
+            else:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS refresh_tokens (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        token_hash VARCHAR(128) NOT NULL UNIQUE,
+                        jti VARCHAR(64) NOT NULL UNIQUE,
+                        expires_at TIMESTAMP NOT NULL,
+                        revoked INTEGER NOT NULL DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        replaced_by VARCHAR(64)
+                    );
+                    CREATE INDEX IF NOT EXISTS ix_refresh_tokens_token_hash ON refresh_tokens (token_hash);
+                    CREATE INDEX IF NOT EXISTS ix_refresh_tokens_jti ON refresh_tokens (jti);
+                    CREATE INDEX IF NOT EXISTS ix_refresh_tokens_user_id ON refresh_tokens (user_id);
+                """))
 
         # 2. Check daily_remittances columns
         if "daily_remittances" in table_names:

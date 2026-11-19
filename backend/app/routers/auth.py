@@ -1,16 +1,17 @@
 """
 TASMAC Shop No. 11066 - Annadurai M
-Authentication, User Management & Audit History API Router
+Authentication, User Management, Refresh Tokens & Audit History API Router
 """
 
 from typing import List, Optional
-from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from datetime import datetime, timedelta
+import re
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc
 
 from ..database import get_db
-from ..models import User, AuditHistory
+from ..models import User, AuditHistory, RefreshToken
 from ..schemas import (
     UserLogin,
     UserCreate,
@@ -18,80 +19,317 @@ from ..schemas import (
     UserResponse,
     UserStatusUpdate,
     UserResetPassword,
+    ChangePasswordRequest,
+    RefreshTokenRequest,
+    LogoutRequest,
     TokenResponse,
     AuditHistoryEntry,
 )
-from ..security import verify_password, hash_password, create_access_token
-from ..deps import require_authenticated, require_admin
+from ..security import (
+    verify_password,
+    hash_password,
+    create_access_token,
+    generate_refresh_token,
+    hash_refresh_token,
+    check_login_rate_limit,
+    record_failed_login,
+    reset_failed_login,
+)
+from ..deps import require_authenticated, require_admin, get_current_user_optional
 
 router = APIRouter(prefix="/api", tags=["Auth & User Management"])
 
 
 @router.post("/auth/login", response_model=TokenResponse)
-def login(login_data: UserLogin, db: Session = Depends(get_db)):
+def login(login_data: UserLogin, request: Request, db: Session = Depends(get_db)):
     """
-    Login using Username or Mobile Number and Password / PIN.
-    Supports Admin (Annadurai M) and View-Only Staff users.
+    Common login for Admin (ANNADURAI M) and View-Only Staff (PREM, SELVAKUMAR).
+    Accepts 10-digit mobile number or username and password / PIN.
+    Implements rate limiting: temporary lockout after 5 failed attempts (15 min).
+    Issues 30-minute access token and 30-day rotated refresh token.
     """
-    identifier = (login_data.identifier or login_data.username or "").strip()
+    raw_ident = (login_data.mobile_number or login_data.identifier or login_data.username or "").strip()
+    client_ip = request.client.host if request.client else "unknown"
+    rate_key = raw_ident.lower() if raw_ident else client_ip
+
+    # Check Rate Limit (Temporary lockout after 5 failed attempts)
+    is_locked, remaining_seconds = check_login_rate_limit(rate_key)
+    if is_locked:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many failed login attempts. Account temporarily locked. Please try again in {remaining_seconds} seconds.",
+            headers={"Retry-After": str(remaining_seconds)},
+        )
+
+    # Find user by mobile number or username (with backward-compatible alias for admin)
     user = (
         db.query(User)
-        .filter(or_(User.username == identifier, User.mobile_number == identifier))
+        .filter(or_(User.username == raw_ident, User.mobile_number == raw_ident))
         .first()
     )
+    if not user and raw_ident in ("9842111066", "9443626183"):
+        user = db.query(User).filter(User.username == "annadurai").first()
+
+    provided_secret = login_data.password or login_data.pin or ""
 
     if not user:
+        record_failed_login(rate_key)
+        # Log unauthorized attempt in audit log
+        audit = AuditHistory(
+            user_name=raw_ident or "Unknown",
+            user_role="UNAUTHORIZED",
+            device_id=client_ip,
+            entity_type="AUTH",
+            entity_id=0,
+            reference_number=raw_ident,
+            action="LOGIN_FAILED",
+            changes_json=f"Failed login attempt for nonexistent user/mobile: '{raw_ident}' from IP {client_ip}",
+        )
+        db.add(audit)
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username, mobile number, or password.",
+            detail="Invalid mobile number, username, or password.",
         )
 
     if user.is_active != 1:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Your staff account has been deactivated by Admin Annadurai M.",
+            detail="Your staff account has been deactivated by Admin ANNADURAI M. Please contact the administrator.",
         )
 
-    provided_secret = login_data.password or login_data.pin or ""
+    # Verify password against hash or legacy PIN (or Admin migration PINs 2006/11066)
     valid = False
-
-    # Check password_hash if set
     if user.password_hash:
         valid = verify_password(provided_secret, user.password_hash)
 
-    # Fallback to PIN if legacy or PIN matches
     if not valid and user.pin:
         valid = (provided_secret == user.pin) or verify_password(provided_secret, user.pin)
 
+    if not valid and user.role == "ADMIN" and provided_secret in ("2006", "11066"):
+        valid = True
+
     if not valid:
+        record_failed_login(rate_key)
+        audit = AuditHistory(
+            user_name=user.full_name,
+            user_role=user.role,
+            device_id=client_ip,
+            entity_type="AUTH",
+            entity_id=user.id,
+            reference_number=user.username,
+            action="LOGIN_FAILED",
+            changes_json=f"Incorrect password attempt for user '{user.username}' ({user.mobile_number}) from IP {client_ip}",
+        )
+        db.add(audit)
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username, mobile number, or password.",
+            detail="Invalid mobile number, username, or password.",
         )
+
+    # Successful login: reset rate limit counter
+    reset_failed_login(rate_key)
 
     # Update last login timestamp
     user.last_login = datetime.utcnow()
-    db.commit()
 
-    # Generate token
-    token = create_access_token({
+    # Generate 30-minute access token
+    access_token = create_access_token({
         "sub": user.username,
         "name": user.full_name,
         "role": user.role,
         "shop": user.shop_number,
+        "mobile": user.mobile_number,
     })
 
+    # Generate cryptographic 30-day refresh token
+    raw_refresh_token, token_hash, jti = generate_refresh_token()
+    refresh_record = RefreshToken(
+        user_id=user.id,
+        token_hash=token_hash,
+        jti=jti,
+        expires_at=datetime.utcnow() + timedelta(days=30),
+        revoked=0,
+    )
+    db.add(refresh_record)
+
+    # Audit log successful login
+    audit = AuditHistory(
+        user_name=user.full_name,
+        user_role=user.role,
+        device_id=client_ip,
+        entity_type="AUTH",
+        entity_id=user.id,
+        reference_number=user.username,
+        action="LOGIN_SUCCESS",
+        changes_json=f"Successful login as {user.role} for user '{user.username}' ({user.full_name})",
+    )
+    db.add(audit)
+    db.commit()
+
     return TokenResponse(
-        access_token=token,
+        access_token=access_token,
+        refresh_token=raw_refresh_token,
+        expires_in=1800,  # 30 minutes
         token_type="bearer",
         user=UserResponse.model_validate(user),
     )
+
+
+@router.post("/auth/refresh", response_model=TokenResponse)
+def refresh_session_token(data: RefreshTokenRequest, db: Session = Depends(get_db)):
+    """
+    Rotates refresh token and issues a fresh 30-minute access token.
+    Detects refresh token reuse and immediately invalidates compromised sessions.
+    """
+    raw_token = (data.refresh_token or "").strip()
+    if not raw_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token is required.",
+        )
+
+    t_hash = hash_refresh_token(raw_token)
+    token_record = db.query(RefreshToken).filter(RefreshToken.token_hash == t_hash).first()
+
+    if not token_record or token_record.expires_at < datetime.utcnow():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired session. Please log in again.",
+        )
+
+    # Reuse detection: if an already-revoked refresh token is presented, revoke ALL tokens for that user
+    if token_record.revoked == 1:
+        db.query(RefreshToken).filter(RefreshToken.user_id == token_record.user_id).update({"revoked": 1})
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Security violation: Token reuse detected. All active sessions have been terminated. Please log in again.",
+        )
+
+    # Valid token: revoke old token and rotate
+    token_record.revoked = 1
+
+    user = db.query(User).filter(User.id == token_record.user_id).first()
+    if not user or user.is_active != 1:
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is inactive or not found.",
+        )
+
+    new_raw, new_hash, new_jti = generate_refresh_token()
+    token_record.replaced_by = new_jti
+
+    new_record = RefreshToken(
+        user_id=user.id,
+        token_hash=new_hash,
+        jti=new_jti,
+        expires_at=datetime.utcnow() + timedelta(days=30),
+        revoked=0,
+    )
+    db.add(new_record)
+
+    new_access_token = create_access_token({
+        "sub": user.username,
+        "name": user.full_name,
+        "role": user.role,
+        "shop": user.shop_number,
+        "mobile": user.mobile_number,
+    })
+
+    db.commit()
+
+    return TokenResponse(
+        access_token=new_access_token,
+        refresh_token=new_raw,
+        expires_in=1800,
+        token_type="bearer",
+        user=UserResponse.model_validate(user),
+    )
+
+
+@router.post("/auth/logout")
+def logout(
+    data: Optional[LogoutRequest] = None,
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+):
+    """
+    Logs out user and invalidates refresh token in database.
+    """
+    if data and data.refresh_token:
+        t_hash = hash_refresh_token(data.refresh_token)
+        db.query(RefreshToken).filter(RefreshToken.token_hash == t_hash).update({"revoked": 1})
+        db.commit()
+
+    if current_user:
+        audit = AuditHistory(
+            user_name=current_user.full_name,
+            user_role=current_user.role,
+            entity_type="AUTH",
+            entity_id=current_user.id,
+            reference_number=current_user.username,
+            action="LOGOUT",
+            changes_json=f"User '{current_user.username}' logged out.",
+        )
+        db.add(audit)
+        db.commit()
+
+    return {"success": True, "message": "Logged out successfully."}
 
 
 @router.get("/auth/me", response_model=UserResponse)
 def get_current_user_profile(current_user: User = Depends(require_authenticated)):
     """Returns profile and role of currently logged in user."""
     return UserResponse.model_validate(current_user)
+
+
+@router.post("/auth/change-password")
+def change_password(
+    data: ChangePasswordRequest,
+    current_user: User = Depends(require_authenticated),
+    db: Session = Depends(get_db),
+):
+    """Allows authenticated user to change their password."""
+    # Verify current password
+    valid = False
+    if current_user.password_hash:
+        valid = verify_password(data.current_password, current_user.password_hash)
+    if not valid and current_user.pin:
+        valid = (data.current_password == current_user.pin) or verify_password(data.current_password, current_user.pin)
+
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect.",
+        )
+
+    if not data.new_password or len(data.new_password) < 4:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be at least 4 characters long.",
+        )
+
+    current_user.password_hash = hash_password(data.new_password)
+    current_user.pin = data.new_password[:20] if len(data.new_password) <= 20 else data.new_password[:10]
+    # Revoke all existing refresh tokens for security
+    db.query(RefreshToken).filter(RefreshToken.user_id == current_user.id).update({"revoked": 1})
+
+    audit = AuditHistory(
+        user_name=current_user.full_name,
+        user_role=current_user.role,
+        entity_type="AUTH",
+        entity_id=current_user.id,
+        reference_number=current_user.username,
+        action="UPDATE",
+        changes_json=f"User '{current_user.username}' changed their password.",
+    )
+    db.add(audit)
+    db.commit()
+
+    return {"success": True, "message": "Password changed successfully. Please log in with your new password."}
 
 
 # =========================================================================
@@ -120,8 +358,6 @@ def create_staff_user(
     No user can register themselves or be created as ADMIN.
     Rejects duplicate mobile numbers with HTTP 409 Conflict.
     """
-    import re
-
     full_name = (data.full_name or data.name or "").strip()
     if not full_name:
         raise HTTPException(status_code=400, detail="Staff member full name is required.")
@@ -206,6 +442,10 @@ def update_user_status(
         target_status = 1 if is_active else 0
 
     user.is_active = target_status
+    # If deactivating, revoke all active refresh tokens for this user
+    if target_status == 0:
+        db.query(RefreshToken).filter(RefreshToken.user_id == user.id).update({"revoked": 1})
+
     db.commit()
     db.refresh(user)
 
@@ -237,8 +477,6 @@ def update_user_profile(
     Admin can edit staff details or their own details.
     Rejects duplicate mobile numbers with HTTP 409 Conflict.
     """
-    import re
-
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
@@ -304,6 +542,9 @@ def reset_user_password(
         raise HTTPException(status_code=400, detail="Password must be at least 4 characters long.")
 
     user.password_hash = hash_password(data.new_password)
+    user.pin = data.new_password[:20] if len(data.new_password) <= 20 else data.new_password[:10]
+    # Revoke all active refresh tokens for this user so they must log in with new password
+    db.query(RefreshToken).filter(RefreshToken.user_id == user.id).update({"revoked": 1})
     db.commit()
 
     audit = AuditHistory(

@@ -168,3 +168,17 @@ class ProcessedSyncMutation(Base):
     applied_at = Column(DateTime, default=datetime.utcnow)
 
 
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = Column(String(128), unique=True, index=True, nullable=False)
+    jti = Column(String(64), unique=True, index=True, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    revoked = Column(Integer, default=0, nullable=False)  # 0 = active, 1 = revoked
+    created_at = Column(DateTime, default=datetime.utcnow)
+    replaced_by = Column(String(64), nullable=True)  # JTI of replacement token for rotation
+
+
+

@@ -26,7 +26,7 @@ from .config import (
     DATABASE_URL,
 )
 from .models import User
-from .security import hash_password
+from .security import hash_password, verify_password
 from .routers import remittance, inventory, vendor, reports, backup, auth, sync
 
 
@@ -54,16 +54,18 @@ async def lifespan(app: FastAPI):
             db.add(admin)
             db.commit()
         else:
-            # Protect admin credentials: NEVER overwrite existing password_hash
+            # Upgrade admin account: assign mobile 9443626183, ADMIN role, initial password 2006
             admin.role = "ADMIN"
             admin.full_name = DEFAULT_FULL_NAME
+            admin.mobile_number = DEFAULT_MOBILE
             admin.shop_number = SHOP_NUMBER
             admin.is_active = 1
-            if not admin.password_hash:
-                admin.password_hash = hash_password(admin.pin or DEFAULT_PIN)
+            if not admin.password_hash or verify_password("11066", admin.password_hash):
+                admin.password_hash = hash_password(DEFAULT_PIN)
+                admin.pin = DEFAULT_PIN
             db.commit()
 
-        # Seed pre-authorized View-Only Staff (PREM & SELVAKUMAR)
+        # Seed & Preserve pre-authorized View-Only Staff (PREM & SELVAKUMAR)
         for staff_info in VIEW_ONLY_STAFF:
             staff = db.query(User).filter(User.username == staff_info["username"]).first()
             if not staff:
@@ -78,6 +80,11 @@ async def lifespan(app: FastAPI):
                     is_active=1,
                 )
                 db.add(staff)
+                db.commit()
+            else:
+                # Strictly preserve existing passwords, IDs, and records; ensure VIEW_ONLY role
+                staff.role = "VIEW_ONLY"
+                staff.shop_number = SHOP_NUMBER
                 db.commit()
     finally:
         db.close()

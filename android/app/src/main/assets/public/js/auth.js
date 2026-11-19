@@ -7,15 +7,85 @@
 const AuthManager = {
   currentUser: null,
   token: null,
-  apiBaseUrl: window.location.origin.includes('localhost') || window.location.origin.includes('127.0.0.1')
-    ? 'http://localhost:8000'
-    : window.location.origin,
+  refreshTimerId: null,
 
   init() {
     this.loadSession();
+    this.restoreKeystoreSession();
+    this.startTokenRefreshTimer();
     this.bindEvents();
     this.updateUserUI();
     this.applyRoleRestrictions();
+  },
+
+  // ---------------------------------------------------------
+  // ANDROID KEYSTORE HARDWARE-BACKED SECURE STORAGE BRIDGE
+  // ---------------------------------------------------------
+  getSecureRefreshToken() {
+    try {
+      if (window.AndroidNative && typeof window.AndroidNative.getSecureToken === 'function') {
+        const tok = window.AndroidNative.getSecureToken('tasmac_refresh_token');
+        if (tok && tok.trim()) return tok.trim();
+      }
+    } catch (e) {
+      console.warn('Keystore read warning, falling back to secure local storage:', e);
+    }
+    return localStorage.getItem('tasmac_refresh_token') || '';
+  },
+
+  setSecureRefreshToken(token) {
+    if (!token) return;
+    try {
+      if (window.AndroidNative && typeof window.AndroidNative.setSecureToken === 'function') {
+        window.AndroidNative.setSecureToken('tasmac_refresh_token', token);
+      }
+    } catch (e) {
+      console.warn('Keystore write warning, using local storage:', e);
+    }
+    localStorage.setItem('tasmac_refresh_token', token);
+  },
+
+  removeSecureRefreshToken() {
+    try {
+      if (window.AndroidNative && typeof window.AndroidNative.removeSecureToken === 'function') {
+        window.AndroidNative.removeSecureToken('tasmac_refresh_token');
+      }
+    } catch (e) {}
+    localStorage.removeItem('tasmac_refresh_token');
+  },
+
+  async restoreKeystoreSession() {
+    const rt = this.getSecureRefreshToken();
+    if (rt && (!this.token || this.isTokenExpired(this.token))) {
+      try {
+        await this.refreshAccessToken();
+      } catch (e) {
+        console.warn('Silent session restore failed:', e);
+      }
+    }
+  },
+
+  isTokenExpired(token) {
+    if (!token) return true;
+    try {
+      const parts = token.split('.');
+      if (parts.length !== 3) return true;
+      const payload = JSON.parse(atob(parts[1]));
+      return payload.exp && payload.exp < Math.floor(Date.now() / 1000);
+    } catch (_) {
+      return false;
+    }
+  },
+
+  startTokenRefreshTimer() {
+    if (this.refreshTimerId) clearInterval(this.refreshTimerId);
+    // Refresh access token every 25 minutes (token expires at 30 min)
+    this.refreshTimerId = setInterval(() => {
+      const rt = this.getSecureRefreshToken();
+      if (rt) {
+        this.refreshAccessToken().catch((err) => console.warn('Periodic token refresh skipped:', err));
+      }
+    }, 25 * 60 * 1000);
   },
 
   loadSession() {
@@ -26,13 +96,13 @@ const AuthManager = {
         this.currentUser = JSON.parse(stored);
         this.token = token;
       } else {
-        // Default session: Primary Admin ANNADURAI M (Shop 11066)
+        // Default Primary Admin ANNADURAI M (Shop 11066)
         this.currentUser = {
           id: 1,
           username: 'annadurai',
           name: 'ANNADURAI M',
           role: 'ADMIN',
-          mobile_number: '9842111066',
+          mobile_number: '9443626183',
           shop_number: '11066',
         };
       }
@@ -43,20 +113,23 @@ const AuthManager = {
         username: 'annadurai',
         name: 'ANNADURAI M',
         role: 'ADMIN',
-        mobile_number: '9842111066',
+        mobile_number: '9443626183',
         shop_number: '11066',
       };
     }
   },
 
-  saveSession(user, token) {
+  saveSession(user, accessToken, refreshToken) {
     this.currentUser = user;
-    this.token = token || null;
+    this.token = accessToken || null;
     localStorage.setItem('tasmac_user_session', JSON.stringify(user));
-    if (token) {
-      localStorage.setItem('tasmac_auth_token', token);
+    if (accessToken) {
+      localStorage.setItem('tasmac_auth_token', accessToken);
     } else {
       localStorage.removeItem('tasmac_auth_token');
+    }
+    if (refreshToken) {
+      this.setSecureRefreshToken(refreshToken);
     }
     this.updateUserUI();
     this.applyRoleRestrictions();
@@ -74,17 +147,22 @@ const AuthManager = {
     return !this.isAdmin();
   },
 
+  // ---------------------------------------------------------
+  // COMMON LOGIN ENGINE (Admin 9443626183 & Staff Users)
+  // ---------------------------------------------------------
   async login(identifier, password) {
     const trimmedId = (identifier || '').trim();
     const trimmedPass = (password || '').trim();
 
     if (!trimmedId || !trimmedPass) {
-      throw new Error('Please enter your Username or Mobile Number and Password.');
+      const err = new Error('Please enter your 10-digit mobile number or username and password.');
+      err.state = 'invalid';
+      throw err;
     }
 
     const apiUrl = this.getApiUrl();
 
-    // If cloud API is configured and reachable, try backend API
+    // 1. Try Backend FastAPI Authentication
     if (apiUrl) {
       try {
         const res = await fetch(`${apiUrl}/api/auth/login`, {
@@ -103,43 +181,189 @@ const AuthManager = {
             mobile_number: data.user.mobile_number,
             shop_number: data.user.shop_number || '11066',
           };
-          this.saveSession(user, data.access_token);
+          this.saveSession(user, data.access_token, data.refresh_token);
           return user;
         } else {
           const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.detail || 'Invalid username/mobile or password.');
-        }
-      } catch (err) {
-        if (!err.message.includes('Invalid')) {
-          console.warn('Backend unreachable, checking offline credentials...');
-        } else {
+          const errMsg = errData.detail || 'Invalid mobile number or password.';
+          const err = new Error(errMsg);
+
+          if (res.status === 403) {
+            err.state = 'deactivated';
+            err.message = 'Your account is deactivated. Contact Admin ANNADURAI M.';
+          } else if (res.status === 401) {
+            err.state = 'invalid';
+            err.message = 'Invalid mobile number or password.';
+          } else if (res.status === 429) {
+            err.state = 'invalid';
+            err.message = errMsg;
+          } else {
+            err.state = 'invalid';
+          }
           throw err;
         }
+      } catch (err) {
+        if (err.state) {
+          // Explicit API rejection (401, 403, 429) -> don't swallow
+          throw err;
+        }
+        console.warn('Backend server unreachable, trying offline local verification...', err.message);
       }
     }
 
-    // Local / Offline Verification
+    // 2. Offline Fallback Verification (Zero Internet Local Mode)
+    // Primary Admin ANNADURAI M
     if (
-      (trimmedId.toLowerCase() === 'annadurai' || trimmedId === '9842111066') &&
-      (trimmedPass === '11066' || trimmedPass === 'admin11066' || trimmedPass === 'tasmac11066')
+      (trimmedId === '9443626183' || trimmedId.toLowerCase() === 'annadurai' || trimmedId === '9842111066') &&
+      (trimmedPass === '2006' || trimmedPass === '11066')
     ) {
       const offlineAdmin = {
         id: 1,
         username: 'annadurai',
         name: 'ANNADURAI M',
         role: 'ADMIN',
-        mobile_number: '9842111066',
+        mobile_number: '9443626183',
         shop_number: '11066',
       };
-      this.saveSession(offlineAdmin, null);
+      this.saveSession(offlineAdmin, null, null);
       return offlineAdmin;
     }
 
-    throw new Error('Invalid username/mobile number or password. For Admin access use: annadurai / 11066');
+    // Pre-authorized Staff PREM
+    if (trimmedId === '9842111001' && (trimmedPass === '11066' || trimmedPass === '2006')) {
+      const offlinePrem = {
+        id: 3,
+        username: 'prem',
+        name: 'PREM',
+        role: 'VIEW_ONLY',
+        mobile_number: '9842111001',
+        shop_number: '11066',
+      };
+      this.saveSession(offlinePrem, null, null);
+      return offlinePrem;
+    }
+
+    // Pre-authorized Staff SELVAKUMAR
+    if (trimmedId === '9842111002' && (trimmedPass === '11066' || trimmedPass === '2006')) {
+      const offlineSelva = {
+        id: 4,
+        username: 'selvakumar',
+        name: 'SELVAKUMAR',
+        role: 'VIEW_ONLY',
+        mobile_number: '9842111002',
+        shop_number: '11066',
+      };
+      this.saveSession(offlineSelva, null, null);
+      return offlineSelva;
+    }
+
+    // Check offline cached users from IndexedDB
+    try {
+      if (window.tasmacDB && window.tasmacDB.getCachedUsers) {
+        const cached = await window.tasmacDB.getCachedUsers();
+        const found = cached.find((u) => u.mobile_number === trimmedId || u.username === trimmedId.toLowerCase());
+        if (found) {
+          if (found.is_active === 0) {
+            const err = new Error('Your account is deactivated. Contact Admin ANNADURAI M.');
+            err.state = 'deactivated';
+            throw err;
+          }
+          const offlineUser = {
+            id: found.id,
+            username: found.username,
+            name: found.full_name || found.name,
+            role: found.role || 'VIEW_ONLY',
+            mobile_number: found.mobile_number,
+            shop_number: '11066',
+          };
+          this.saveSession(offlineUser, null, null);
+          return offlineUser;
+        }
+      }
+    } catch (e) {
+      if (e.state) throw e;
+    }
+
+    const netErr = new Error('Cannot connect to server. Check your internet connection.');
+    netErr.state = 'network';
+    throw netErr;
   },
 
-  logout() {
-    // Switch to View-Only guest session
+  // ---------------------------------------------------------
+  // REFRESH TOKEN ROTATION & SESSION RESTORATION
+  // ---------------------------------------------------------
+  async refreshAccessToken() {
+    const refreshToken = this.getSecureRefreshToken();
+    if (!refreshToken) return null;
+
+    const apiUrl = this.getApiUrl();
+    if (!apiUrl) return null;
+
+    try {
+      const res = await fetch(`${apiUrl}/api/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        this.token = data.access_token;
+        localStorage.setItem('tasmac_auth_token', data.access_token);
+        if (data.refresh_token) {
+          this.setSecureRefreshToken(data.refresh_token);
+        }
+        if (data.user) {
+          const user = {
+            id: data.user.id,
+            username: data.user.username,
+            name: data.user.full_name || data.user.name,
+            role: data.user.role,
+            mobile_number: data.user.mobile_number,
+            shop_number: data.user.shop_number || '11066',
+          };
+          this.currentUser = user;
+          localStorage.setItem('tasmac_user_session', JSON.stringify(user));
+          this.updateUserUI();
+          this.applyRoleRestrictions();
+        }
+        return data.access_token;
+      } else {
+        // Token revoked or expired -> clear tokens and notify
+        console.warn('Refresh token rejected (HTTP ' + res.status + ')');
+        this.removeSecureRefreshToken();
+        localStorage.removeItem('tasmac_auth_token');
+        this.token = null;
+        return null;
+      }
+    } catch (e) {
+      console.warn('Network error during token refresh:', e);
+      return null;
+    }
+  },
+
+  async logout() {
+    const refreshToken = this.getSecureRefreshToken();
+    const apiUrl = this.getApiUrl();
+
+    // Call backend to invalidate refresh token in database
+    if (apiUrl && refreshToken) {
+      try {
+        await fetch(`${apiUrl}/api/auth/logout`, {
+          method: 'POST',
+          headers: this.getAuthHeaders(),
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        });
+      } catch (e) {
+        console.warn('Logout notification error:', e);
+      }
+    }
+
+    this.removeSecureRefreshToken();
+    localStorage.removeItem('tasmac_auth_token');
+    this.token = null;
+
+    // Switch to View-Only session
     const guestUser = {
       id: 0,
       username: 'staff_guest',
@@ -148,9 +372,10 @@ const AuthManager = {
       mobile_number: '',
       shop_number: '11066',
     };
-    this.saveSession(guestUser, null);
+    this.saveSession(guestUser, null, null);
     if (window.App) {
-      window.App.showToast('Switched to View-Only access mode.', 'info');
+      window.App.showToast('Logged out. Switched to View-Only access mode.', 'info');
+      window.App.refreshAllData();
     }
   },
 
@@ -164,9 +389,9 @@ const AuthManager = {
   },
 
   getToken() {
-    if (this.token) return this.token;
+    if (this.token && !this.isTokenExpired(this.token)) return this.token;
     const stored = localStorage.getItem('tasmac_auth_token');
-    if (stored) {
+    if (stored && !this.isTokenExpired(stored)) {
       this.token = stored;
       return stored;
     }
@@ -174,54 +399,9 @@ const AuthManager = {
   },
 
   async ensureToken() {
-    if (this.getToken()) return this.token;
-    // Auto-login handshake for Primary Admin ANNADURAI M
-    if (this.isAdmin() && this.currentUser) {
-      try {
-        const apiUrl = this.getApiUrl();
-        if (apiUrl) {
-          const res = await fetch(`${apiUrl}/api/auth/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              username: this.currentUser.username || 'annadurai',
-              password: '11066',
-            }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.access_token) {
-              this.token = data.access_token;
-              localStorage.setItem('tasmac_auth_token', data.access_token);
-              return this.token;
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('Auto-login token notice:', e.message);
-      }
-    }
-    return null;
-  },
-
-  resetToLocalOnly() {
-    localStorage.removeItem('tasmac_cloud_api_url');
-    const inp = document.getElementById('cloud-api-url-input');
-    if (inp) inp.value = '';
-    const resBox = document.getElementById('cloud-test-result');
-    if (resBox) {
-      resBox.style.display = 'block';
-      resBox.style.background = '#e8f5e9';
-      resBox.style.color = '#145a32';
-      resBox.textContent = 'Switched to 100% Standalone Local Database Mode.';
-    }
-    if (window.SyncManager) {
-      window.SyncManager.cloudConnected = false;
-      window.SyncManager.triggerSync();
-    }
-    if (window.App) {
-      window.App.showToast('Reset to Standalone Local Database Mode.', 'info');
-    }
+    const t = this.getToken();
+    if (t) return t;
+    return await this.refreshAccessToken();
   },
 
   getAuthHeaders() {
@@ -303,6 +483,19 @@ const AuthManager = {
         roleEl.style.color = '#ffffff';
       }
     }
+
+    const isAdmin = this.isAdmin();
+    const btnLogin = document.getElementById('btn-header-login');
+    const btnLogout = document.getElementById('btn-header-logout');
+    const btnUserMgmt = document.getElementById('btn-header-user-mgmt');
+    const btnCloud = document.getElementById('btn-header-cloud');
+    const btnAudit = document.getElementById('btn-header-audit');
+
+    if (btnLogin) btnLogin.style.display = isAdmin ? 'none' : 'inline-flex';
+    if (btnLogout) btnLogout.style.display = isAdmin ? 'inline-flex' : 'none';
+    if (btnUserMgmt) btnUserMgmt.style.display = isAdmin ? 'inline-flex' : 'none';
+    if (btnCloud) btnCloud.style.display = isAdmin ? 'inline-flex' : 'none';
+    if (btnAudit) btnAudit.style.display = isAdmin ? 'inline-flex' : 'none';
   },
 
   bindEvents() {
@@ -336,19 +529,63 @@ const AuthManager = {
     }
   },
 
-  openLoginModal() {
+  togglePasswordVisibility() {
+    const passInp = document.getElementById('login-password');
+    const eyeOpen = document.getElementById('eye-icon-open');
+    const eyeClosed = document.getElementById('eye-icon-closed');
+    if (!passInp) return;
+    if (passInp.type === 'password') {
+      passInp.type = 'text';
+      if (eyeOpen) eyeOpen.style.display = 'none';
+      if (eyeClosed) eyeClosed.style.display = 'block';
+    } else {
+      passInp.type = 'password';
+      if (eyeOpen) eyeOpen.style.display = 'block';
+      if (eyeClosed) eyeClosed.style.display = 'none';
+    }
+  },
+
+  showLoginError(msg, state = 'invalid') {
+    const errBox = document.getElementById('login-error-msg');
+    if (!errBox) return;
+    errBox.className = `login-error-alert state-${state}`;
+    errBox.innerHTML = `⚠️ ${msg}`;
+    errBox.style.display = 'block';
+  },
+
+  clearLoginError() {
+    const errBox = document.getElementById('login-error-msg');
+    if (errBox) {
+      errBox.style.display = 'none';
+      errBox.className = 'login-error-alert';
+      errBox.innerHTML = '';
+    }
+  },
+
+  openLoginModal(initialState = null, initialMessage = null) {
     const modal = document.getElementById('login-modal');
     if (modal) {
       modal.style.display = 'flex';
       const userInp = document.getElementById('login-identifier');
       if (userInp) {
         userInp.value = '';
-        userInp.focus();
+        setTimeout(() => userInp.focus(), 150);
       }
       const passInp = document.getElementById('login-password');
-      if (passInp) passInp.value = '';
-      const errBox = document.getElementById('login-error-msg');
-      if (errBox) errBox.style.display = 'none';
+      if (passInp) {
+        passInp.value = '';
+        passInp.type = 'password';
+      }
+      const eyeOpen = document.getElementById('eye-icon-open');
+      const eyeClosed = document.getElementById('eye-icon-closed');
+      if (eyeOpen) eyeOpen.style.display = 'block';
+      if (eyeClosed) eyeClosed.style.display = 'none';
+
+      if (initialMessage) {
+        this.showLoginError(initialMessage, initialState || 'expired');
+      } else {
+        this.clearLoginError();
+      }
     }
   },
 
@@ -359,17 +596,20 @@ const AuthManager = {
 
   async handleLoginFormSubmit(e) {
     if (e) e.preventDefault();
-    const id = document.getElementById('login-identifier').value;
-    const pass = document.getElementById('login-password').value;
-    const errBox = document.getElementById('login-error-msg');
+    const id = (document.getElementById('login-identifier')?.value || '').trim();
+    const pass = (document.getElementById('login-password')?.value || '').trim();
     const submitBtn = document.getElementById('login-submit-btn');
+    const spinner = document.getElementById('login-spinner');
+    const btnText = document.getElementById('login-btn-text');
+
+    this.clearLoginError();
 
     try {
       if (submitBtn) {
         submitBtn.disabled = true;
-        submitBtn.textContent = 'Verifying...';
+        if (spinner) spinner.style.display = 'inline-block';
+        if (btnText) btnText.textContent = 'LOGGING IN...';
       }
-      if (errBox) errBox.style.display = 'none';
 
       await this.login(id, pass);
       this.closeLoginModal();
@@ -378,14 +618,13 @@ const AuthManager = {
         window.App.refreshAllData();
       }
     } catch (err) {
-      if (errBox) {
-        errBox.style.display = 'block';
-        errBox.textContent = err.message || 'Login failed. Please check credentials.';
-      }
+      const state = err.state || 'invalid';
+      this.showLoginError(err.message || 'Login failed. Please check credentials.', state);
     } finally {
       if (submitBtn) {
         submitBtn.disabled = false;
-        submitBtn.textContent = 'Log In';
+        if (spinner) spinner.style.display = 'none';
+        if (btnText) btnText.innerHTML = 'LOG IN &rarr;';
       }
     }
   },

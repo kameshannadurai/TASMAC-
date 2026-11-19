@@ -17,8 +17,8 @@ SHOP_TITLE = "TASMAC SHOP NO. 11066"
 # Default Primary Admin Credentials
 DEFAULT_USERNAME = "annadurai"
 DEFAULT_FULL_NAME = "ANNADURAI M"
-DEFAULT_MOBILE = "9842111066"
-DEFAULT_PIN = "11066"
+DEFAULT_MOBILE = "9443626183"
+DEFAULT_PIN = "2006"
 
 # Pre-Authorized View-Only Staff Members
 VIEW_ONLY_STAFF = [
@@ -59,7 +59,9 @@ if ENVIRONMENT == "production":
 else:
     SECRET_KEY = _env_secret or "tasmac_shop_11066_annadurai_m_offline_key_2026"
 
-TOKEN_EXPIRY_SECONDS = int(os.getenv("TOKEN_EXPIRY_SECONDS", str(30 * 24 * 3600)))  # 30 days default session
+TOKEN_EXPIRY_SECONDS = int(os.getenv("TOKEN_EXPIRY_SECONDS", "1800"))  # 30 min default access token
+ACCESS_TOKEN_EXPIRY_SECONDS = int(os.getenv("ACCESS_TOKEN_EXPIRY_SECONDS", "1800"))  # 30 minutes
+REFRESH_TOKEN_EXPIRY_SECONDS = int(os.getenv("REFRESH_TOKEN_EXPIRY_SECONDS", str(30 * 24 * 3600)))  # 30 days
 
 # Production CORS Configuration
 _raw_cors = os.getenv("CORS_ORIGINS", "*")

@@ -18,10 +18,11 @@ class UserBase(BaseModel):
 
 
 class UserLogin(BaseModel):
-    username: Optional[str] = "annadurai"
+    username: Optional[str] = None
     identifier: Optional[str] = None
+    mobile_number: Optional[str] = None
     password: Optional[str] = None
-    pin: Optional[str] = "11066"
+    pin: Optional[str] = None
 
 
 class UserCreate(BaseModel):
@@ -48,6 +49,19 @@ class UserResetPassword(BaseModel):
     new_password: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: Optional[str] = None
+
+
 class UserResponse(UserBase):
     id: int
     created_at: Optional[datetime] = None
@@ -57,6 +71,8 @@ class UserResponse(UserBase):
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: Optional[str] = None
+    expires_in: int = 1800  # 30 minutes in seconds
     token_type: str = "bearer"
     user: UserResponse
 

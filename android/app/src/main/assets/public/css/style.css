@@ -1420,66 +1420,212 @@ body {
   box-sizing: border-box;
 }
 
-/* Login Modal Responsive Sizing */
-#login-modal .modal-box {
+/* ============================================================
+   COMMON PROFESSIONAL LOGIN SCREEN (DARK RED & WHITE THEME)
+   TASMAC Shop No. 11066 - Primary Admin: ANNADURAI M
+   Theme: Dark Red (#7a0c0c, #8b0000), Pure White (#ffffff), Gold (#d4af37)
+   ============================================================ */
+.login-screen-modal .modal-box {
   width: 100%;
-  max-width: 380px;
+  max-width: 420px;
   margin: auto;
-  border-radius: 16px;
+  border-radius: 18px;
   overflow: hidden;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  background: #ffffff;
+  border: 1.5px solid #d4af37;
+  box-shadow: 0 18px 50px rgba(122, 12, 12, 0.45);
   box-sizing: border-box;
 }
 
-#login-modal .modal-header {
-  padding: 14px 18px;
-  background: var(--primary-dark);
+.login-header-red {
+  background: linear-gradient(135deg, #4d0707 0%, #7a0c0c 50%, #8b0000 100%);
+  color: #ffffff;
+  padding: 24px 20px 18px 20px;
+  text-align: center;
+  position: relative;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
-#login-modal .modal-header h3 {
-  font-size: 19px;
-  font-weight: 800;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-#login-modal .modal-body {
-  padding: 16px 18px;
-}
-
-#login-modal .form-control {
-  font-size: 17px;
-  padding: 11px 14px;
-  border-radius: 8px;
-  border: 1.5px solid var(--border-color);
-  width: 100%;
-  box-sizing: border-box;
-}
-
-#login-modal .form-control:focus {
-  border-color: var(--primary);
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(20, 90, 50, 0.15);
-}
-
-#login-modal .modal-footer {
-  padding: 12px 18px 16px 18px;
-  display: flex;
-  gap: 10px;
-  justify-content: space-between;
-  border-top: 1px solid #f0f0f0;
-}
-
-#login-modal .modal-footer .btn {
-  flex: 1 1 auto;
-  min-height: 48px;
-  font-size: 16px;
-  font-weight: 800;
-  border-radius: 8px;
+.login-logo-circle {
+  width: 58px;
+  height: 58px;
+  background: #ffffff;
+  border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  border: 2.5px solid #d4af37;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  margin-bottom: 10px;
+}
+
+.login-logo-circle svg {
+  width: 32px;
+  height: 32px;
+  color: #7a0c0c;
+}
+
+.login-brand-title {
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: 1.2px;
+  color: #ffffff;
+  margin-bottom: 3px;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.35);
+}
+
+.login-shop-pill {
+  display: inline-block;
+  background: #d4af37;
+  color: #3b0505;
+  font-size: 12.5px;
+  font-weight: 800;
+  padding: 3px 12px;
+  border-radius: 12px;
+  letter-spacing: 1px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.login-body-white {
+  background: #ffffff;
+  padding: 22px 20px 18px 20px;
+}
+
+.login-input-group {
+  margin-bottom: 16px;
+  position: relative;
+}
+
+.login-input-label {
+  display: block;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #5c0808;
+  margin-bottom: 6px;
+}
+
+.login-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.login-input-icon {
+  position: absolute;
+  left: 14px;
+  color: #8b0000;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-input-control {
+  width: 100%;
+  padding: 12px 14px 12px 44px;
+  font-size: 16.5px;
+  border-radius: 10px;
+  border: 1.5px solid #d9c5c5;
+  background: #fdfcfc;
+  color: #1a1a1a;
+  outline: none;
+  transition: all 0.2s ease;
+  box-sizing: border-box;
+}
+
+.login-input-control:focus {
+  border-color: #8b0000;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(139, 0, 0, 0.16);
+}
+
+.login-password-toggle {
+  position: absolute;
+  right: 12px;
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: color 0.2s;
+}
+
+.login-password-toggle:hover,
+.login-password-toggle:active {
+  color: #8b0000;
+}
+
+.login-btn-submit {
+  width: 100%;
+  padding: 14px;
+  background: linear-gradient(135deg, #7a0c0c 0%, #8b0000 50%, #9e0d0d 100%);
+  color: #ffffff;
+  border: none;
+  border-radius: 10px;
+  font-size: 17.5px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  box-shadow: 0 4px 14px rgba(122, 12, 12, 0.35);
+  transition: all 0.2s ease;
+  margin-top: 18px;
+  min-height: 50px;
+  box-sizing: border-box;
+}
+
+.login-btn-submit:active {
+  transform: scale(0.98);
+  box-shadow: 0 2px 6px rgba(122, 12, 12, 0.45);
+}
+
+.login-btn-submit:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.login-error-alert {
+  padding: 11px 14px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  font-weight: 700;
+  margin-bottom: 16px;
+  display: none;
+  border-left: 4px solid;
+  animation: fadeIn 0.25s ease-out;
+  line-height: 1.4;
+}
+
+.login-error-alert.state-invalid {
+  background: #fdf2f2;
+  border-color: #c0392b;
+  color: #922b21;
+}
+
+.login-error-alert.state-deactivated {
+  background: #fef9e7;
+  border-color: #d35400;
+  color: #a04000;
+}
+
+.login-error-alert.state-expired {
+  background: #eaf2f8;
+  border-color: #2980b9;
+  color: #1b4f72;
+}
+
+.login-error-alert.state-network {
+  background: #f4ecf7;
+  border-color: #8e44ad;
+  color: #5b2c6f;
 }
 
 .modal-header {

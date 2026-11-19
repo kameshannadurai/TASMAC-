@@ -149,6 +149,47 @@ const ApiConfig = {
     }
     return `Connection error: ${baseMsg}`;
   },
+  /**
+   * Performs an authenticated fetch against the API.
+   * Automatically attaches Bearer token, handles JSON serialization,
+   * and intercepts 401 Unauthorized to trigger automatic token refresh.
+   */
+  async fetchAuth(path, options = {}) {
+    const baseUrl = this.getBaseUrl();
+    const url = path.startsWith('http') ? path : `${baseUrl}${path.startsWith('/') ? path : '/' + path}`;
+
+    const headers = Object.assign(
+      { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      options.headers || {}
+    );
+
+    if (window.AuthManager && window.AuthManager.getToken) {
+      const token = window.AuthManager.getToken();
+      if (token && !headers['Authorization']) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+    }
+
+    const opts = Object.assign({}, options, { headers });
+
+    try {
+      let res = await fetch(url, opts);
+
+      // Handle 401: Token expired -> Attempt Refresh
+      if (res.status === 401 && window.AuthManager && window.AuthManager.refreshAccessToken) {
+        const refreshedToken = await window.AuthManager.refreshAccessToken().catch(() => null);
+        if (refreshedToken) {
+          headers['Authorization'] = `Bearer ${refreshedToken}`;
+          opts.headers = headers;
+          res = await fetch(url, opts);
+        }
+      }
+
+      return res;
+    } catch (err) {
+      throw new Error(this.formatNetworkError(err, baseUrl));
+    }
+  },
 };
 
 window.ApiConfig = ApiConfig;

@@ -103,3 +103,8 @@ def require_admin(
             detail="Access Denied: Administrative privileges required. Only Admin ANNADURAI M can create, edit, or delete records.",
         )
     return current_user
+
+
+# Aliases for compatibility and clarity across routers
+get_current_user = require_authenticated
+require_view_access = require_authenticated
