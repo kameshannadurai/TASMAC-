@@ -38,6 +38,12 @@ class UserStatusUpdate(BaseModel):
     is_active: int  # 1 or 0
 
 
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    full_name: Optional[str] = None
+    mobile_number: Optional[str] = None
+
+
 class UserResetPassword(BaseModel):
     new_password: str
 

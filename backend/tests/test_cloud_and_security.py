@@ -672,3 +672,75 @@ def test_view_only_user_cannot_manage_users(client, view_only_headers):
     )
     assert res_create.status_code == 403
 
+
+def test_admin_can_edit_user_name_and_phone(client, admin_headers):
+    """
+    Admin can edit user's full name and 10-digit mobile number via PUT /api/users/{id}.
+    """
+    # 1. Create a staff user to edit
+    staff_data = {
+        "full_name": "Initial Name",
+        "mobile_number": "9000000001",
+        "password": "initialpass123",
+        "role": "VIEW_ONLY",
+        "shop_number": "11066",
+    }
+    res = client.post("/api/users", json=staff_data, headers=admin_headers)
+    if res.status_code == 409:
+        users = client.get("/api/users", headers=admin_headers).json()
+        u = next(x for x in users if x["mobile_number"] == "9000000001")
+        user_id = u["id"]
+    else:
+        assert res.status_code == 201
+        user_id = res.json()["id"]
+
+    # 2. Admin edits name and phone number
+    edit_data = {
+        "full_name": "Annadurai Staff New Name",
+        "mobile_number": "9000000002",
+    }
+    res_edit = client.put(f"/api/users/{user_id}", json=edit_data, headers=admin_headers)
+    assert res_edit.status_code == 200
+    updated = res_edit.json()
+    assert updated["full_name"] == "Annadurai Staff New Name"
+    assert updated["mobile_number"] == "9000000002"
+
+    # 3. Verify user can log in with new mobile number
+    login_res = client.post(
+        "/api/auth/login",
+        json={"identifier": "9000000002", "password": "initialpass123"},
+    )
+    assert login_res.status_code == 200
+    assert login_res.json()["user"]["full_name"] == "Annadurai Staff New Name"
+
+
+def test_edit_user_duplicate_mobile_returns_409(client, admin_headers):
+    """
+    Attempting to edit a user's mobile number to one already in use returns HTTP 409 Conflict.
+    """
+    users = client.get("/api/users", headers=admin_headers).json()
+    admin_user = next(u for u in users if u["username"] == "annadurai")
+    staff_user = next(u for u in users if u["username"] != "annadurai")
+
+    # Try setting staff user's mobile to Admin's mobile (9842111066)
+    res = client.put(
+        f"/api/users/{staff_user['id']}",
+        json={"mobile_number": admin_user["mobile_number"]},
+        headers=admin_headers,
+    )
+    assert res.status_code == 409
+    assert "already registered" in res.json()["detail"].lower()
+
+
+def test_view_only_user_cannot_edit_user(client, view_only_headers):
+    """
+    Non-admin staff with VIEW_ONLY cannot edit user details (HTTP 403).
+    """
+    res = client.put(
+        "/api/users/1",
+        json={"full_name": "Hacked Name"},
+        headers=view_only_headers,
+    )
+    assert res.status_code == 403
+
+

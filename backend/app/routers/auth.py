@@ -14,6 +14,7 @@ from ..models import User, AuditHistory
 from ..schemas import (
     UserLogin,
     UserCreate,
+    UserUpdate,
     UserResponse,
     UserStatusUpdate,
     UserResetPassword,
@@ -222,6 +223,56 @@ def update_user_status(
     db.commit()
 
     return UserResponse.model_validate(user)
+
+
+@router.put("/users/{user_id}", response_model=UserResponse)
+def update_user_profile(
+    user_id: int,
+    data: UserUpdate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """
+    Admin Only: Updates a user's full name and mobile number.
+    Admin can edit staff details or their own details.
+    Rejects duplicate mobile numbers with HTTP 409 Conflict.
+    """
+    import re
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    new_name = (data.full_name or data.name or "").strip()
+    new_mobile = (data.mobile_number or "").strip()
+
+    if not new_name and not new_mobile:
+        raise HTTPException(status_code=400, detail="Please provide at least a name or mobile number to update.")
+
+    changes = []
+    if new_name and new_name != user.full_name:
+        changes.append(f"Name: '{user.full_name}' -> '{new_name}'")
+        user.full_name = new_name
+
+    if new_mobile and new_mobile != user.mobile_number:
+        if not re.match(r"^\d{10}$", new_mobile):
+            raise HTTPException(status_code=400, detail="Mobile number must be exactly 10 digits.")
+        # Check uniqueness across other users
+        dup = db.query(User).filter(User.mobile_number == new_mobile, User.id != user_id).first()
+        if dup:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Mobile number '{new_mobile}' is already registered to '{dup.full_name}'.",
+            )
+        changes.append(f"Mobile: '{user.mobile_number or ''}' -> '{new_mobile}'")
+        user.mobile_number = new_mobile
+
+    if not changes:
+        return UserResponse.model_validate(user)
+
+    db.commit()
+    db.refresh(user)
+
     audit = AuditHistory(
         user_name=admin.full_name,
         user_role=admin.role,
@@ -229,7 +280,7 @@ def update_user_status(
         entity_id=user.id or 0,
         reference_number=user.username,
         action="UPDATE",
-        changes_json=f"{action_text} staff account '{user.username}'.",
+        changes_json=f"Updated details for user '{user.username}': " + "; ".join(changes),
     )
     db.add(audit)
     db.commit()

@@ -411,17 +411,17 @@ const AuthManager = {
   },
 
   async loadUsersTable() {
-    const tbody = document.getElementById('users-table-body');
-    if (!tbody) return;
+    const container = document.getElementById('users-list-container') || document.getElementById('users-table-body');
+    if (!container) return;
 
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:18px; color:#555;">Loading registered staff accounts...</td></tr>`;
+    container.innerHTML = `<div style="text-align:center; padding:18px; color:#555;">Loading registered shop users...</div>`;
 
     const apiUrl = this.getApiUrl();
     if (!apiUrl) {
-      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#c0392b; padding:18px;">
+      container.innerHTML = `<div style="text-align:center; color:#c0392b; padding:18px;">
         Backend Cloud URL is not configured.<br>
         <button class="btn btn-sm btn-gold" style="margin-top:8px;" onclick="AuthManager.openCloudSettingsModal()">Configure Cloud Backend</button>
-      </td></tr>`;
+      </div>`;
       return;
     }
 
@@ -445,41 +445,56 @@ const AuthManager = {
       }
 
       const users = await res.json();
+      this.cachedUsers = Array.isArray(users) ? users : [];
+
       if (!Array.isArray(users) || users.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:18px; color:#666;">No staff accounts registered yet.</td></tr>`;
+        container.innerHTML = `<div style="text-align:center; padding:18px; color:#666;">No staff accounts registered yet.</div>`;
         return;
       }
 
-      tbody.innerHTML = users
+      container.innerHTML = users
         .map((u) => {
           const isPrimary = u.username === 'annadurai';
           const displayName = u.full_name || u.name || u.username;
+          const mobile = u.mobile_number || 'No mobile linked';
           const roleBadge =
             u.role === 'ADMIN'
-              ? `<span style="background:#d4af37; color:#0e3820; padding:2px 8px; border-radius:12px; font-weight:800; font-size:12px;">👑 ADMIN</span>`
-              : `<span style="background:#e8f5e9; color:#145a32; padding:2px 8px; border-radius:12px; font-weight:800; font-size:12px;">👁️ VIEW-ONLY</span>`;
+              ? `<span style="background:#d4af37; color:#0e3820; padding:3px 9px; border-radius:12px; font-weight:800; font-size:11.5px;">👑 ADMIN</span>`
+              : `<span style="background:#e8f5e9; color:#145a32; padding:3px 9px; border-radius:12px; font-weight:800; font-size:11.5px;">👁️ VIEW-ONLY</span>`;
 
           const statusBadge = u.is_active
-            ? `<span style="color:#27ae60; font-weight:700;">🟢 Active</span>`
-            : `<span style="color:#c0392b; font-weight:700;">🔴 Inactive</span>`;
-
-          const actionBtns = isPrimary
-            ? `<span style="color:#888; font-size:12px; font-weight:600;">Primary Admin (Protected)</span>`
-            : `<button class="btn btn-sm btn-secondary" onclick="AuthManager.toggleUserActive(${u.id}, ${!u.is_active})">
-                 ${u.is_active ? 'Deactivate' : 'Activate'}
-               </button>
-               <button class="btn btn-sm btn-gold" style="margin-left:4px;" onclick="AuthManager.promptResetPassword(${u.id}, '${displayName.replace(/'/g, "\\'")}')">
-                 Reset PIN
-               </button>`;
+            ? `<span style="color:#27ae60; font-weight:700; font-size:12px;">🟢 Active</span>`
+            : `<span style="color:#c0392b; font-weight:700; font-size:12px;">🔴 Inactive</span>`;
 
           return `
-            <tr style="border-bottom:1px solid #e0e0e0;">
-              <td style="padding:10px 12px; font-weight:700; color:#0e3820;">${displayName}</td>
-              <td style="padding:10px 12px; font-weight:600;">${u.mobile_number || '-'}</td>
-              <td style="padding:10px 12px;">${roleBadge}</td>
-              <td style="padding:10px 12px;">${statusBadge}</td>
-              <td style="padding:10px 12px; text-align:right;">${actionBtns}</td>
-            </tr>
+            <div class="user-item-card" style="background:#ffffff; border:1.5px solid #d1ded6; border-radius:10px; padding:12px 14px; margin-bottom:10px; box-shadow:0 1px 3px rgba(0,0,0,0.05); box-sizing:border-box;">
+              <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+                <div style="min-width:0; flex:1 1 auto;">
+                  <div style="font-weight:800; font-size:16px; color:#0e3820; word-break:break-word;">${displayName}</div>
+                  <div style="font-size:13.5px; color:#444; font-weight:600; margin-top:3px; display:flex; align-items:center; gap:5px;">
+                    <span>📞</span> <span style="letter-spacing:0.5px; font-weight:700; color:#145a32;">${mobile}</span>
+                  </div>
+                </div>
+                <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px; flex-shrink:0;">
+                  ${roleBadge}
+                  ${statusBadge}
+                </div>
+              </div>
+              <div style="display:flex; gap:6px; justify-content:flex-end; align-items:center; margin-top:10px; padding-top:8px; border-top:1px solid #edf2ef; flex-wrap:wrap;">
+                <button type="button" class="btn btn-sm btn-gold" onclick="AuthManager.openEditUserModal(${u.id})" style="font-weight:800; padding:5px 12px; font-size:12px;">
+                  ✏️ Edit
+                </button>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="AuthManager.promptResetPassword(${u.id}, '${displayName.replace(/'/g, "\\'")}')" style="font-weight:700; padding:5px 10px; font-size:12px;">
+                  🔑 Reset PIN
+                </button>
+                ${isPrimary
+                  ? '<span style="font-size:11px; font-weight:700; color:#888; align-self:center; margin-left:4px;">(Primary Admin)</span>'
+                  : `<button type="button" class="btn btn-sm ${u.is_active ? 'btn-secondary' : 'btn-gold'}" onclick="AuthManager.toggleUserActive(${u.id}, ${!u.is_active})" style="font-weight:700; padding:5px 10px; font-size:12px;">
+                      ${u.is_active ? 'Deactivate' : 'Activate'}
+                    </button>`
+                }
+              </div>
+            </div>
           `;
         })
         .join('');
@@ -488,10 +503,10 @@ const AuthManager = {
       const friendlyError = window.ApiConfig
         ? window.ApiConfig.formatNetworkError(err, apiUrl)
         : err.message;
-      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#c0392b; padding:18px; line-height:1.5;">
+      container.innerHTML = `<div style="text-align:center; color:#c0392b; padding:18px; line-height:1.5;">
         <b>Unable to load users:</b><br>${friendlyError}<br>
         <button class="btn btn-sm btn-secondary" style="margin-top:8px;" onclick="AuthManager.loadUsersTable()">🔄 Retry</button>
-      </td></tr>`;
+      </div>`;
     }
   },
 
@@ -662,6 +677,143 @@ const AuthManager = {
       }
     } catch (err) {
       alert(`Error resetting password: ${err.message}`);
+    }
+  },
+
+  openEditUserModal(userId) {
+    if (!this.isAdmin()) {
+      alert('Access Denied: Only Admin ANNADURAI M can edit user details.');
+      return;
+    }
+
+    const modal = document.getElementById('edit-user-modal');
+    if (!modal) return;
+
+    let user = (this.cachedUsers || []).find((u) => u.id === userId);
+    if (!user && this.currentUser && this.currentUser.id === userId) {
+      user = this.currentUser;
+    }
+
+    const idInp = document.getElementById('edit-user-id');
+    const nameInp = document.getElementById('edit-user-name');
+    const mobInp = document.getElementById('edit-user-mobile');
+    const errBox = document.getElementById('edit-user-error');
+
+    if (idInp) idInp.value = userId;
+    if (nameInp) nameInp.value = user ? (user.full_name || user.name || '') : '';
+    if (mobInp) mobInp.value = user ? (user.mobile_number || '') : '';
+    if (errBox) errBox.style.display = 'none';
+
+    modal.style.display = 'flex';
+    if (nameInp) nameInp.focus();
+  },
+
+  closeEditUserModal() {
+    const modal = document.getElementById('edit-user-modal');
+    if (modal) modal.style.display = 'none';
+  },
+
+  async handleEditUserSubmit(e) {
+    if (e) e.preventDefault();
+    if (!this.isAdmin()) {
+      alert('Access Denied: Only Admin ANNADURAI M can edit user details.');
+      return;
+    }
+
+    const idInp = document.getElementById('edit-user-id');
+    const nameInp = document.getElementById('edit-user-name');
+    const mobInp = document.getElementById('edit-user-mobile');
+    const errBox = document.getElementById('edit-user-error');
+    const submitBtn = document.getElementById('edit-user-submit-btn');
+
+    const userId = parseInt(idInp.value);
+    const newName = (nameInp.value || '').trim();
+    const newMobile = (mobInp.value || '').trim();
+
+    if (!newName) {
+      if (errBox) {
+        errBox.style.display = 'block';
+        errBox.textContent = 'Please enter a name.';
+      }
+      return;
+    }
+
+    if (!/^\d{10}$/.test(newMobile)) {
+      if (errBox) {
+        errBox.style.display = 'block';
+        errBox.textContent = 'Mobile number must be exactly 10 digits.';
+      }
+      return;
+    }
+
+    const apiUrl = this.getApiUrl();
+    if (!apiUrl) {
+      if (errBox) {
+        errBox.style.display = 'block';
+        errBox.textContent = 'Backend Cloud URL is not configured.';
+      }
+      return;
+    }
+
+    try {
+      if (errBox) errBox.style.display = 'none';
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Saving...';
+      }
+
+      await this.ensureToken();
+
+      const res = await fetch(`${apiUrl}/api/users/${userId}`, {
+        method: 'PUT',
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify({
+          full_name: newName,
+          name: newName,
+          mobile_number: newMobile,
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        let errMsg = errData.detail || `Server returned HTTP ${res.status}`;
+        if (res.status === 409) {
+          errMsg = errData.detail || `Mobile number '${newMobile}' is already registered to another user.`;
+        } else if (res.status === 403) {
+          errMsg = 'Permission denied. Only Admin ANNADURAI M can edit user details.';
+        }
+        throw new Error(errMsg);
+      }
+
+      const updatedUser = await res.json();
+
+      // If current logged-in user was edited, update session & UI badges
+      if (this.currentUser && (this.currentUser.id === userId || this.currentUser.username === updatedUser.username)) {
+        this.currentUser.name = updatedUser.full_name || updatedUser.name || newName;
+        this.currentUser.mobile_number = updatedUser.mobile_number || newMobile;
+        this.saveSession(this.currentUser, this.token);
+        this.updateUserUI();
+      }
+
+      this.closeEditUserModal();
+      if (window.App) {
+        window.App.showToast(`Details for "${newName}" updated successfully!`, 'success');
+      }
+
+      await this.loadUsersTable();
+    } catch (err) {
+      console.error('Error updating user:', err);
+      if (errBox) {
+        errBox.style.display = 'block';
+        errBox.textContent = window.ApiConfig
+          ? window.ApiConfig.formatNetworkError(err, apiUrl)
+          : err.message;
+      }
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '💾 Save Changes';
+      }
     }
   },
 
